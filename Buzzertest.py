@@ -124,12 +124,7 @@ def inventory_color(rgb_color, white_threshold=240):
     return is_white(rgb_color, white_threshold)
 
 
-def dead_color(rgb_color, secondary_rgb_color=None, white_threshold=240):
-    if secondary_rgb_color is not None:
-        primary_is_light = is_white(rgb_color, white_threshold)
-        secondary_is_light = is_white(secondary_rgb_color, white_threshold)
-        return (primary_is_light or secondary_is_light)
-    return is_white(rgb_color, white_threshold)
+
     
 
 
@@ -260,78 +255,70 @@ def LeftLeg(color):
         
 
 def inventory(color):    #Fix this its jank
-        global _last_vibration_level
+    global _last_vibration_level
+    
+    if inventory_color(color) and head(color) == 0.0:
+        # Inventory is open - health bar is hidden, return last detected vibration level
+        print(f"Inventory open - maintaining previous vibration level: {_last_vibration_level}")
+        return _last_vibration_level
+    else:
+        # Inventory is closed - detect health from visible indicator and update stored level
+        print("Inventory closed - detecting health from visible bar")
         
-        if inventory_color(color) and head(color) == 0.0:
-            # Inventory is open - health bar is hidden, return last detected vibration level
-            print(f"Inventory open - maintaining previous vibration level: {_last_vibration_level}")
-            return _last_vibration_level
+        if is_red(color):
+            print("Red detected - high vibration")
+            _last_vibration_level = red_limb
+            return red_limb
+        elif is_orange(color):
+            print("Orange detected - medium vibration")
+            _last_vibration_level = orange_limb
+            return orange_limb
+        elif is_yellow(color):
+            print("Yellow detected - low vibration")
+            _last_vibration_level = yellow_limb
+            return yellow_limb
+        elif is_black(color):
+            print("Black detected - critical vibration")
+            _last_vibration_level = black_limb
+            return black_limb
+        elif is_green(color):
+            print("Green detected - no vibration")
+            _last_vibration_level = green_limb
+            return green_limb
         else:
-            # Inventory is closed - detect health from visible indicator and update stored level
-            print("Inventory closed - detecting health from visible bar")
-            
-            if is_red(color):
-                print("Red detected - high vibration")
-                _last_vibration_level = red_limb
-                return red_limb
-            elif is_orange(color):
-                print("Orange detected - medium vibration")
-                _last_vibration_level = orange_limb
-                return orange_limb
-            elif is_yellow(color):
-                print("Yellow detected - low vibration")
-                _last_vibration_level = yellow_limb
-                return yellow_limb
-            elif is_black(color):
-                print("Black detected - critical vibration")
-                _last_vibration_level = black_limb
-                return black_limb
-            elif is_green(color):
-                print("Green detected - no vibration")
-                _last_vibration_level = green_limb
-                return green_limb
-            else:
-                print("No damage detected")
-                _last_vibration_level = 0.0
-                return 0.0
-
-def dead(color, secondary_color=None):
-        global _dead_override_active
-        if color is not None and secondary_color is not None:
-            is_dead = dead_color(color, secondary_color)
-        else:
-            is_dead = False
-
-        if is_dead:
-            _dead_override_active = True
-            print("Death detected - takes precedence over other detectors")
+            print("No damage detected")
+            _last_vibration_level = 0.0
             return 0.0
-        else:
-            _dead_override_active = False
-            print("Player alive - normal detector flow resumes")
-            return None  # No change to vibration level
+
+def dead(color, secondary_color, head_color):
+    global _dead_override_active
+    if _dead_override_active:
+        return None
+    if is_white(color) and is_white(secondary_color) and head(head_color) == black_limb:
+        print("Dead detected - stopping vibration")
+        _dead_override_active = True
+        return 0.0
+    return None
+        
 
 
-def alive(color):
-        if _dead_override_active:
-            if head(color) != black_limb and LeftLeg(color) != black_limb and RightLeg(color) != black_limb:
-                print("Player alive - resuming normal detector flow")
-                _dead_override_active = False
-                return True
-        else:
-            return False
+
+
+
+def alive(head_color, left_leg_color, right_leg_color):
+    global _dead_override_active
+
+    if not _dead_override_active:
+        return False  # Already alive
+
+    if head(head_color) != black_limb and LeftLeg(left_leg_color) != black_limb and RightLeg(right_leg_color) != black_limb:
+        print("Player alive - resuming normal detector flow")
+        _dead_override_active = False
+        return True
+    
+    return None
         
     
-
-
-        
-        
-
-
-
-
-
-
 
 
 async def main():
@@ -343,31 +330,35 @@ async def main():
 
     try:
         while True:
-            try:
-                # Get colors from all limb locations
-                colors = get_all_limb_colors()
+            colors = get_all_limb_colors()
 
-                dead_result = dead(colors.get("dead"), colors.get("dead_alt"))
-                print(f"Dead samples: {colors.get('dead')} / {colors.get('dead_alt')}")
-                print(f"Dead detector result: {dead_result}")
-
-                if dead_result == 0.0:
-                    print("Dead detected - skipping damage detector")
+            # If we are in dead override, only check alive
+            if _dead_override_active:
+                if alive(colors["head"], colors["left_leg"], colors["right_leg"]):
+                    print("Alive detected, resuming normal detection")
                 else:
-                    # Test head function
-                    head_color = colors["head"]
-                    print(f"Head RGB: {head_color}")
-                    damage_level = head(head_color)
-                
+                    print("Still dead; skipping limb detection")
+                    await asyncio.sleep(0.5)
+                    continue
+
+            # Normal mode: check if we died again
+            dead_result = dead(colors["dead"], colors["dead_alt"], colors["head"])
+            print(f"Dead samples: {colors['dead']} / {colors['dead_alt']}")
+            print(f"Dead detector result: {dead_result}")
+
+            if dead_result == 0.0:
+                print("Dead detected - pausing limb/vibration detection")
                 await asyncio.sleep(0.5)
-                
-            except Exception as e:
-                print(f"Error during color detection: {e}")
-                await asyncio.sleep(0.5)
-                # print("Attempting to reconnect to server...")
-                # await client.connect("ws://localhost:12345")
                 continue
-    
+
+            # Normal limb detection here
+            head_color = colors["head"]
+            print(f"Head RGB: {head_color}")
+            damage_level = head(head_color)
+
+            await asyncio.sleep(0.5)
+            
+            
     except KeyboardInterrupt:
         print("\nTest stopped by user")
     
