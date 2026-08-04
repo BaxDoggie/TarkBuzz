@@ -38,7 +38,7 @@ def get_all_limb_colors():
             "inventory": {"left": 1074, "top": 875},
             "inventory_alt": {"left": 40, "top": 1357},
             "dead": {"left": 1713, "top": 52},
-            "dead_alt": {"left": 1703, "top": 1252},
+            "dead_alt": {"left": 1770, "top": 1328},
             
         }
         
@@ -115,7 +115,7 @@ def is_black(rgb_color, threshold=50):
             g < threshold and 
             b < threshold)
 
-def is_white(rgb_color, white_threshold=240):
+def is_white(rgb_color, white_threshold=225):
     r, g, b = rgb_color
     return (r > white_threshold and 
             g > white_threshold and 
