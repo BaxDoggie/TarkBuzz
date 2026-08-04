@@ -36,6 +36,7 @@ def get_all_limb_colors():
             "right_leg": {"left": 50, "top": 250},       
             "left_leg": {"left": 150, "top": 250},
             "inventory": {"left": 1074, "top": 875},
+            "inventory_alt": {"left": 40, "top": 1357},
             "dead": {"left": 1713, "top": 52},
             "dead_alt": {"left": 1703, "top": 1252},
             
@@ -121,8 +122,6 @@ def is_white(rgb_color, white_threshold=240):
             b > white_threshold)
 
 
-def inventory_color(rgb_color, white_threshold=240):
-    return is_white(rgb_color, white_threshold)
 
 
 
@@ -255,10 +254,10 @@ def LeftLeg(color):
             return black_limb
         
 
-def inventory(color, head_color):    #FIX
+def inventory(color, inventory_alt_color):    #FIX
     global _last_vibration_level, _inventory_override_active
     
-    if inventory_color(color) and head(head_color) == black_limb:
+    if is_white(color) and is_white(inventory_alt_color) == False:
         print("Inventory open detected - stopping vibration")
         _inventory_override_active = True
         return _last_vibration_level  # Return last vibration level to maintain state
