@@ -254,16 +254,21 @@ def LeftLeg(color):
             return black_limb
         
 
-def inventory(color, inventory_alt_color):    #FIX
-    global _last_vibration_level, _inventory_override_active
-    
-    if is_white(color) and is_white(inventory_alt_color) == False:
-        print("Inventory open detected - stopping vibration")
-        _inventory_override_active = True
-        return _last_vibration_level  # Return last vibration level to maintain state
-    _inventory_override_active = False
-    return None  # No override, continue normal detection
+def inventory_open(color, inventory_alt_color):
+    return is_white(color) and not is_white(inventory_alt_color)
 
+
+
+
+
+
+def handle_inventory(inventory_color, inventory_alt_color):
+    global _inventory_override_active
+    if inventory_open(inventory_color, inventory_alt_color):
+        _inventory_override_active = True
+        return _last_vibration_level
+    _inventory_override_active = False
+    return None
 
 
 
