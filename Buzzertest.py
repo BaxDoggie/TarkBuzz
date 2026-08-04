@@ -129,129 +129,52 @@ def is_white(rgb_color, white_threshold=240):
 
 
 
+def get_damage_level_for_color(color):
+    if is_green(color):
+        print("Green detected - stopping vibration")
+        return green_limb
+    if is_yellow(color):
+        print("Yellow detected - low vibration")
+        return yellow_limb
+    if is_orange(color):
+        print("Orange detected - medium vibration")
+        return orange_limb
+    if is_red(color):
+        print("Red detected - high vibration")
+        return red_limb
+    if is_black(color):
+        print("Black detected - critical vibration")
+        return black_limb
+    print("No damage detected")
+    return 0.0
+
+
 def head(color):
-       
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-        else:
-            print("No damage detected")
-            return 0.0
-        
-        
+    return get_damage_level_for_color(color)
+
+
 def Thorax(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-        
+    return get_damage_level_for_color(color)
+
+
 def stomach(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-        
+    return get_damage_level_for_color(color)
+
+
 def RightArm(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-        
+    return get_damage_level_for_color(color)
+
+
 def LeftArm(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-      
+    return get_damage_level_for_color(color)
+
+
 def RightLeg(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
-        
+    return get_damage_level_for_color(color)
+
+
 def LeftLeg(color):
-        if is_green(color):
-            print("Green detected - stopping vibration")
-            return green_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            return yellow_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            return orange_limb
-        elif is_red(color):
-            print("Red detected - high vibration")
-            return red_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            return black_limb
+    return get_damage_level_for_color(color)
         
 
 def inventory_open(color, inventory_alt_color):
@@ -279,14 +202,13 @@ def handle_inventory(inventory_color, inventory_alt_color):
 
 def dead(color, secondary_color, head_color):
     global _dead_override_active
-    if _dead_override_active:
-        return None
     if is_white(color) and is_white(secondary_color) and head(head_color) == black_limb:
         print("Dead detected - stopping vibration")
         _dead_override_active = True
         return 0.0
+    if _dead_override_active:
+        return 0.0
     return None
-        
 
 
 
@@ -303,9 +225,23 @@ def alive(head_color, left_leg_color, right_leg_color):
         _dead_override_active = False
         return True
     
-    return None
-        
-    
+    return False
+
+
+def calculate_damage_level(colors):
+    global _last_vibration_level
+    mapping = {
+        "head": head,
+        "thorax": Thorax,
+        "stomach": stomach,
+        "right_arm": RightArm,
+        "left_arm": LeftArm,
+        "right_leg": RightLeg,
+        "left_leg": LeftLeg,
+    }
+    levels = [fn(colors[limb]) for limb, fn in mapping.items() if limb in colors]
+    _last_vibration_level = max(levels) if levels else 0.0
+    return _last_vibration_level
 
 
 async def main():
@@ -348,9 +284,9 @@ async def main():
                 continue
 
             # Normal limb detection here
-            head_color = colors["head"]
-            print(f"Head RGB: {head_color}")
-            damage_level = head(head_color)
+            damage_level = calculate_damage_level(colors)
+            print(f"Calculated normal vibration level: {damage_level:.2f}")
+            print(f"Sampled limb colors: {colors}")
 
             await asyncio.sleep(0.5)
             
@@ -372,9 +308,11 @@ def get_vibration_for_limb(limb_name, color):
     limb_name: one of 'head','thorax','stomach','right_arm','left_arm','right_leg','left_leg'
     color: (r,g,b)
     """
-    global _dead_override_active
+    global _dead_override_active, _inventory_override_active
     if _dead_override_active:
         return 0.0
+    if _inventory_override_active:
+        return _last_vibration_level
 
     mapping = {
         "head": head,

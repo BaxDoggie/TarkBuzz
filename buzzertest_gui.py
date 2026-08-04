@@ -259,7 +259,13 @@ class BuzzGUI:
                 colors = bt.get_all_limb_colors()
                 print(f"MONITOR COLORS: {colors}")
 
-                dead_result = bt.dead(colors.get("dead"), colors.get("dead_alt"))
+                inventory_result = bt.handle_inventory(colors.get("inventory"), colors.get("inventory_alt"))
+                if inventory_result is not None:
+                    print(f"Inventory open - holding last vibration {inventory_result:.2f}")
+                    await asyncio.sleep(0.1)
+                    continue
+
+                dead_result = bt.dead(colors.get("dead"), colors.get("dead_alt"), colors.get("head"))
                 if dead_result == 0.0:
                     print("Dead detector has precedence; other detectors will be skipped")
                     await asyncio.sleep(0.1)
@@ -360,9 +366,16 @@ class BuzzGUI:
                 colors = bt.get_all_limb_colors()
                 print(f"DEBUG: Sampled colors: {colors}")
 
-                dead_result = bt.dead(colors.get("dead"), colors.get("dead_alt"))
+                inventory_result = bt.handle_inventory(colors.get("inventory"), colors.get("inventory_alt"))
+                if inventory_result is not None:
+                    print(f"Inventory open - holding last vibration {inventory_result:.2f}")
+                    self.root.after(0, lambda: messagebox.showinfo("Inventory Open", "Inventory is open; vibration is paused."))
+                    return
+
+                dead_result = bt.dead(colors.get("dead"), colors.get("dead_alt"), colors.get("head"))
                 if dead_result == 0.0:
                     print("Dead detector has precedence; other detectors will be skipped")
+                    self.root.after(0, lambda: messagebox.showinfo("Death Detected", "Dead state detected; vibration paused."))
                     return
                 
                 # Get enabled limbs
