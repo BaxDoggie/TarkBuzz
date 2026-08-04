@@ -1,7 +1,9 @@
 WIP Project
 18+ NSFW Warning
 
-This is an Escape from Tarkov Interface central controller
+This is an Escape from Tarkov Interface central client.
+This client does not interact with the game files or game at all, it just reads what is on screen making it safe from anticheat.
+Please refer to Interface Central documentation and set that up before installing this client.
 
 GAME REQUIREMENTS:
 Must set resolution (Coming soon)
