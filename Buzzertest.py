@@ -328,6 +328,15 @@ async def main():
                     await asyncio.sleep(0.5)
                     continue
 
+
+            inventory_result = handle_inventory(colors["inventory"], colors["inventory_alt"])
+            if inventory_result is not None:
+                print("Inventory open - pausing limb/vibration detection")
+                await asyncio.sleep(0.5)
+                continue
+
+
+
             # Normal mode: check if we died again
             dead_result = dead(colors["dead"], colors["dead_alt"], colors["head"])
             print(f"Dead samples: {colors['dead']} / {colors['dead_alt']}")
