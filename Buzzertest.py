@@ -17,6 +17,7 @@ black_limb = 1.0
 # Track vibration level before inventory opened
 _last_vibration_level = 0.0
 _dead_override_active = True  # Start dead, assume player is not in raid when started (should figure itself out if player is in raid)
+_inventory_override_active = False  # Track if inventory is open to pause vibration
 
 
 
@@ -254,41 +255,23 @@ def LeftLeg(color):
             return black_limb
         
 
-def inventory(color):    #Fix this its jank
-    global _last_vibration_level
+def inventory(color, head_color):    #FIX
+    global _last_vibration_level, _inventory_override_active
     
-    if inventory_color(color) and head(color) == 0.0:
-        # Inventory is open - health bar is hidden, return last detected vibration level
-        print(f"Inventory open - maintaining previous vibration level: {_last_vibration_level}")
-        return _last_vibration_level
-    else:
-        # Inventory is closed - detect health from visible indicator and update stored level
-        print("Inventory closed - detecting health from visible bar")
-        
-        if is_red(color):
-            print("Red detected - high vibration")
-            _last_vibration_level = red_limb
-            return red_limb
-        elif is_orange(color):
-            print("Orange detected - medium vibration")
-            _last_vibration_level = orange_limb
-            return orange_limb
-        elif is_yellow(color):
-            print("Yellow detected - low vibration")
-            _last_vibration_level = yellow_limb
-            return yellow_limb
-        elif is_black(color):
-            print("Black detected - critical vibration")
-            _last_vibration_level = black_limb
-            return black_limb
-        elif is_green(color):
-            print("Green detected - no vibration")
-            _last_vibration_level = green_limb
-            return green_limb
-        else:
-            print("No damage detected")
-            _last_vibration_level = 0.0
-            return 0.0
+    if inventory_color(color) and head(head_color) == black_limb:
+        print("Inventory open detected - stopping vibration")
+        _inventory_override_active = True
+        return _last_vibration_level  # Return last vibration level to maintain state
+    _inventory_override_active = False
+    return None  # No override, continue normal detection
+
+
+
+
+
+
+
+
 
 def dead(color, secondary_color, head_color):
     global _dead_override_active
