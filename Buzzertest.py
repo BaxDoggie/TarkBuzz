@@ -7,6 +7,11 @@ from PIL import Image
 import io
 
 
+Reference_screen_width = 3440
+Reference_screen_height = 1440
+
+
+
 #default vibration levels for each color
 green_limb = 0.0
 yellow_limb = 0.25
@@ -18,6 +23,15 @@ black_limb = 1.0
 _last_vibration_level = 0.0
 _dead_override_active = True  # Start dead, assume player is not in raid when started (should figure itself out if player is in raid)
 _inventory_override_active = False  # Track if inventory is open to pause vibration
+
+
+def get_screen_resolution():
+    """Get the current screen resolution."""
+    with mss.mss() as sct:
+        monitor = sct.monitors[1]  # Primary monitor
+        return monitor["width"], monitor["height"]
+
+
 
 
 
