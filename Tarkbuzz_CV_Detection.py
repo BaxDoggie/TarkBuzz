@@ -2,7 +2,7 @@ import cv2
 import numpy as np
 import time
 import importlib
-dxcam = importlib.import_module("dxcam")
+import dxcam
 
 
 HEAD_REGION = (40, 0, 260, 140) # (x, y, width, height) TEMPORARY
@@ -51,6 +51,24 @@ def detect_head_damage(frame):
         return 0.0
 
     return 0.0
+
+
+def debug_head_loop():
+    print("Starting head debug loop")
+    try:
+        while True:
+            frame = camera.grab(region=HEAD_REGION)
+            if frame is not None:
+                level = detect_head_damage(frame)
+                print(f"Head damage level: {level:.2f}")
+            time.sleep(0.25)
+    except KeyboardInterrupt:
+        print("Stopped")
+
+
+
+if __name__ == "__main__":
+    debug_head_loop()
 
 
 
