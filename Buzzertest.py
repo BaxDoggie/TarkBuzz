@@ -31,33 +31,37 @@ def get_screen_resolution():
         monitor = sct.monitors[1]  # Primary monitor
         return monitor["width"], monitor["height"]
 
+def scale_coordinates(x, y):
+    actual_width, actual_height = get_screen_resolution()
+    scaled_x = int(x * actual_width / Reference_screen_width)
+    scaled_y = int(y * actual_height / Reference_screen_height)
+    return {"left": round(scaled_x), "top": round(scaled_y)}
 
-
+def get_scaled_limb_locations():
+    """Return a dictionary of limb locations scaled to the current screen resolution."""
+    limb_locations = {
+        "head": {"left": 96, "top": 31},            
+        "thorax": {"left": 100, "top": 150},        
+        "stomach": {"left": 100, "top": 200},        
+        "right_arm": {"left": 50, "top": 150},       
+        "left_arm": {"left": 150, "top": 150},      
+        "right_leg": {"left": 50, "top": 250},       
+        "left_leg": {"left": 150, "top": 250},
+        "inventory": {"left": 1074, "top": 875},
+        "inventory_alt": {"left": 40, "top": 1357},
+        "dead": {"left": 1713, "top": 52},
+        "dead_alt": {"left": 1770, "top": 1328},
+    }
+    
+    scaled_locations = {limb: scale_coordinates(pos["left"], pos["top"]) for limb, pos in limb_locations.items()}
+    return scaled_locations
 
 
 def get_all_limb_colors():
-    """Capture colors from each limb location on screen and return RGB values."""
+    limb_locations = get_scaled_limb_locations()
+
     with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        
-        
-        limb_locations = {
-            "head": {"left": 96, "top": 31},            
-            "thorax": {"left": 100, "top": 150},        
-            "stomach": {"left": 100, "top": 200},        
-            "right_arm": {"left": 50, "top": 150},       
-            "left_arm": {"left": 150, "top": 150},      
-            "right_leg": {"left": 50, "top": 250},       
-            "left_leg": {"left": 150, "top": 250},
-            "inventory": {"left": 1074, "top": 875},
-            "inventory_alt": {"left": 40, "top": 1357},
-            "dead": {"left": 1713, "top": 52},
-            "dead_alt": {"left": 1770, "top": 1328},
-            
-        }
-        
         colors = {}
-        
         for limb, position in limb_locations.items():
             box = {
                 "left": position["left"],
@@ -65,19 +69,14 @@ def get_all_limb_colors():
                 "width": 3,
                 "height": 3
             }
-            
-            # Capture screenshot
             screenshot = sct.grab(box)
             img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-            
-            # Calculate average color
             pixels = list(img.getdata())
             avg_r = sum(p[0] for p in pixels) // len(pixels)
             avg_g = sum(p[1] for p in pixels) // len(pixels)
             avg_b = sum(p[2] for p in pixels) // len(pixels)
-            
             colors[limb] = (avg_r, avg_g, avg_b)
-        
+
         return colors
 
 def is_red(rgb_color, red_threshold=150, tolerance=100):
