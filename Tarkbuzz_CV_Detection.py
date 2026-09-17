@@ -7,7 +7,7 @@ import tkinter as tk
 import ctypes
 
 
-HEAD_REGION = (40, 0, 260, 140) # (x, y, width, height) TEMPORARY
+HEAD_REGION = (80, 30, 120, 72)  # (left, top, right, bottom)
 
 camera = dxcam.create()
 
