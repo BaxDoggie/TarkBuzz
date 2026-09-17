@@ -1,3 +1,5 @@
+from turtle import left
+
 import cv2
 import numpy as np
 import time
@@ -6,11 +8,28 @@ import dxcam
 import tkinter as tk
 import ctypes
 
+REFERENCE_WIDTH = 3440
+REFERENCE_HEIGHT = 1440
+
 
 HEAD_REGION = (80, 30, 120, 72)  # (left, top, right, bottom)
 TORSO_REGION = (80, 130, 120, 172)  # (left, top, right, bottom)
 
 camera = dxcam.create()
+
+
+def scale_region(region, actual_width, actual_height):
+    left, top, right, bottom = region
+    scale_x = actual_width / REFERENCE_WIDTH
+    scale_y = actual_height / REFERENCE_HEIGHT
+
+    return (
+            int(left * scale_x),
+            int(top * scale_y),
+            int(right * scale_x),
+            int(bottom * scale_y)
+        )
+
 
 def damage_colour(frame, lower_hsv, upper_hsv):
 
