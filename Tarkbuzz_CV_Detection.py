@@ -3,6 +3,8 @@ import numpy as np
 import time
 import importlib
 import dxcam
+import tkinter as tk
+import ctypes
 
 
 HEAD_REGION = (40, 0, 260, 140) # (x, y, width, height) TEMPORARY
@@ -59,18 +61,70 @@ def detect_head_damage(frame):
     return 0.0
 
 
+DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
+
 def debug_head_loop():
-    print("Starting head debug loop")
+    print("Starting overlay debug. Press Ctrl+C to stop.")
+
+    overlay = create_detection_overlay()
+
     try:
         while True:
             frame = camera.grab(region=HEAD_REGION)
+
             if frame is not None:
                 level = detect_head_damage(frame)
                 print(f"Head damage level: {level:.2f}")
+
+            overlay.update()
             time.sleep(0.25)
+
     except KeyboardInterrupt:
         print("Stopped")
 
+    finally:
+        overlay.destroy()
+
+
+def create_detection_overlay():
+    left, top, right, bottom = HEAD_REGION
+
+    root = tk.Tk()
+    root.overrideredirect(True)
+    root.attributes("-topmost", True)
+    root.attributes("-transparentcolor", "magenta")
+    root.geometry("3440x1440+0+0")
+
+    canvas = tk.Canvas(
+        root,
+        width=3440,
+        height=1440,
+        bg="magenta",
+        highlightthickness=0
+    )
+    canvas.pack()
+
+    canvas.create_rectangle(
+        left,
+        top,
+        right,
+        bottom,
+        outline="lime",
+        width=4
+    )
+
+    # Make the overlay click-through and prevent it taking focus
+    hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
+    styles = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+
+    ctypes.windll.user32.SetWindowLongW(
+        hwnd,
+        -20,
+        styles | 0x20 | 0x80 | 0x8000000
+    )
+
+    root.update()
+    return root
 
 
 if __name__ == "__main__":
