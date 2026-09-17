@@ -34,21 +34,27 @@ def detect_head_damage(frame):
     if frame.shape[-1] == 4:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
-    green = damage_colour(frame, np.array([35, 50, 50]), np.array([90, 255, 255]))
-    yellow = damage_colour(frame, np.array([15, 100, 100]), np.array([30, 255, 255]))
-    orange = damage_colour(frame, np.array([5, 80, 80]), np.array([20, 255, 255]))
-    red1 = damage_colour(frame, np.array([0, 80, 80]), np.array([10, 255, 255]))
-    red2 = damage_colour(frame, np.array([170, 80, 80]), np.array([180, 255, 255]))
-    red = max(red1, red2)
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    r, g, b = cv2.split(rgb)
 
-    if red > 0.08:
-        return 1.0
-    if orange > 0.08:
-        return 0.75
-    if yellow > 0.08:
-        return 0.5
-    if green > 0.05:
+    green = (g > 145) & (r < 45) & (b < 45)
+    yellow = (r > 150) & (g > 150) & (b < 100)
+    orange = (r > 150) & (g > 100) & (b < 100)
+    red = (r > 150) & (g < 100) & (b < 100)
+    black = (r < 50) & (g < 50) & (b < 50)
+
+    total_pixels = frame.shape[0] * frame.shape[1]
+
+    if cv2.countNonZero(green.astype(np.uint8)) / total_pixels > 0.05:
         return 0.0
+    if cv2.countNonZero(yellow.astype(np.uint8)) / total_pixels > 0.08:
+        return 0.25
+    if cv2.countNonZero(orange.astype(np.uint8)) / total_pixels > 0.08:
+        return 0.5
+    if cv2.countNonZero(red.astype(np.uint8)) / total_pixels > 0.08:
+        return 0.75
+    if cv2.countNonZero(black.astype(np.uint8)) / total_pixels > 0.08:
+        return 1.0
 
     return 0.0
 
