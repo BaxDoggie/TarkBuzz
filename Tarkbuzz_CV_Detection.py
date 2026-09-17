@@ -8,6 +8,7 @@ import ctypes
 
 
 HEAD_REGION = (80, 30, 120, 72)  # (left, top, right, bottom)
+TORSO_REGION = (80, 130, 120, 172)  # (left, top, right, bottom)
 
 camera = dxcam.create()
 
