@@ -1,5 +1,3 @@
-from turtle import left
-
 import cv2
 import numpy as np
 import time
@@ -17,6 +15,10 @@ TORSO_REGION = (80, 130, 120, 172)  # (left, top, right, bottom)
 
 camera = dxcam.create()
 
+def get_screen_size():
+    width = ctypes.windll.user32.GetSystemMetrics(0)
+    height = ctypes.windll.user32.GetSystemMetrics(1)
+    return width, height
 
 def scale_region(region, actual_width, actual_height):
     left, top, right, bottom = region
