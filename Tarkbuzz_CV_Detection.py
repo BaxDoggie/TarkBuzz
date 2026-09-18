@@ -88,11 +88,18 @@ DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 def debug_head_loop():
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
-    overlay = create_detection_overlay()
+    screen_width, screen_height = get_screen_size()
+    scaled_head_region = scale_region(
+        HEAD_REGION,
+        screen_width,
+        screen_height
+    )
+
+    overlay = create_detection_overlay(scaled_head_region)
 
     try:
         while True:
-            frame = camera.grab(region=HEAD_REGION)
+            frame = camera.grab(region=scaled_head_region)
 
             if frame is not None:
                 level = detect_head_damage(frame)
@@ -108,8 +115,8 @@ def debug_head_loop():
         overlay.destroy()
 
 
-def create_detection_overlay():
-    left, top, right, bottom = HEAD_REGION
+def create_detection_overlay(region):
+    left, top, right, bottom = region
 
     root = tk.Tk()
     root.overrideredirect(True)
