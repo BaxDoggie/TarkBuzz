@@ -85,7 +85,7 @@ def detect_head_damage(frame):
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
-def debug_head_loop():
+def debug_head_loop(): #Shows damage level in terminal and overlays the detection areas on screen
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
     screen_width, screen_height = get_screen_size()
