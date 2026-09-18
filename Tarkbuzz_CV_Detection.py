@@ -95,7 +95,11 @@ def debug_head_loop():
         screen_height
     )
 
-    overlay = create_detection_overlay(scaled_head_region)
+    overlay = create_detection_overlay(
+        scaled_head_region,
+        screen_width,
+        screen_height
+    )
 
     try:
         while True:
@@ -115,19 +119,19 @@ def debug_head_loop():
         overlay.destroy()
 
 
-def create_detection_overlay(region):
+def create_detection_overlay(region, screen_width, screen_height):
     left, top, right, bottom = region
 
     root = tk.Tk()
     root.overrideredirect(True)
     root.attributes("-topmost", True)
     root.attributes("-transparentcolor", "magenta")
-    root.geometry("3440x1440+0+0")
+    root.geometry(f"{screen_width}x{screen_height}+0+0")
 
     canvas = tk.Canvas(
         root,
-        width=3440,
-        height=1440,
+        width=screen_width,
+        height=screen_height,
         bg="magenta",
         highlightthickness=0
     )
