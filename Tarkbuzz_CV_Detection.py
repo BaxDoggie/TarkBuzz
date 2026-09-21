@@ -14,7 +14,7 @@ HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 81, 111, 119)  # 10 left, 40 up
 DETECTION_INSET = 4
 
-camera = dxcam.create()
+camera = dxcam.create(output_color="BGR")
 
 def get_screen_size():
     width = ctypes.windll.user32.GetSystemMetrics(0)
@@ -84,9 +84,9 @@ def get_colour_percentages(frame):
         (green_channel >= 50)
     )
     yellow = (
-        (green_channel > blue_channel + 10) &
-        (red_channel >= green_channel * 0.25) &
-        (red_channel >= 35) & (green_channel >= 45)
+        (red_channel > blue_channel + 5) &
+        (green_channel > blue_channel + 5) &
+        (red_channel >= 30) & (green_channel >= 30)
     )
     orange = (
         (hue >= 10) & (hue <= 25) &
@@ -107,6 +107,23 @@ def get_colour_percentages(frame):
         "red": cv2.countNonZero(red.astype(np.uint8)) / total_pixels,
         "black": cv2.countNonZero(black.astype(np.uint8)) / total_pixels,
     }
+
+
+def get_colour_diagnostics(frame):
+    if frame is None or frame.size == 0:
+        return "no pixels"
+
+    if frame.shape[-1] == 4:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB).astype(np.float32)
+    average = rgb.reshape(-1, 3).mean(axis=0)
+    brightest = rgb.reshape(-1, 3)[np.argmax(rgb.sum(axis=2))]
+
+    return (
+        f"avg RGB=({average[0]:.0f}, {average[1]:.0f}, {average[2]:.0f}), "
+        f"brightest RGB=({brightest[0]:.0f}, {brightest[1]:.0f}, {brightest[2]:.0f})"
+    )
 
 
 def detect_head_damage(frame):
@@ -178,7 +195,8 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                     f"yellow={percentages['yellow']:.1%}, "
                     f"orange={percentages['orange']:.1%}, "
                     f"red={percentages['red']:.1%}, "
-                    f"black={percentages['black']:.1%}"
+                    f"black={percentages['black']:.1%} | "
+                    f"{get_colour_diagnostics(frame)}"
                 )
 
             overlay.update()
