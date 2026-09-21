@@ -10,8 +10,9 @@ REFERENCE_WIDTH = 3440
 REFERENCE_HEIGHT = 1440
 
 
-HEAD_REGION = (80, 30, 120, 72)  # (left, top, right, bottom)
+HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 81, 111, 119)  # 10 left, 40 up
+DETECTION_INSET = 4
 
 camera = dxcam.create()
 
@@ -33,6 +34,17 @@ def scale_region(region, actual_width, actual_height):
         )
 
 
+def inset_region(region, inset):
+    left, top, right, bottom = region
+
+    return (
+        left + inset,
+        top + inset,
+        right - inset,
+        bottom - inset
+    )
+
+
 def damage_colour(frame, lower_hsv, upper_hsv):
 
     if frame is None or frame.size == 0:
@@ -51,36 +63,70 @@ def damage_colour(frame, lower_hsv, upper_hsv):
 
     return cv2.countNonZero(mask) / total
 
-def detect_head_damage(frame):
+def get_colour_percentages(frame):
     if frame is None or frame.size == 0:
-        return 0.0
+        return {}
 
     if frame.shape[-1] == 4:
         frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
 
     rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
     r, g, b = cv2.split(rgb)
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    hue, saturation, value = cv2.split(hsv)
+    red_channel = r.astype(np.int16)
+    green_channel = g.astype(np.int16)
+    blue_channel = b.astype(np.int16)
 
-    green = (g > 145) & (r < 45) & (b < 45)
-    yellow = (r > 150) & (g > 150) & (b < 100)
-    orange = (r > 150) & (g > 100) & (b < 100)
-    red = (r > 150) & (g < 100) & (b < 100)
-    black = (r < 50) & (g < 50) & (b < 50)
+    green = (
+        (green_channel > red_channel + 20) &
+        (green_channel > blue_channel + 20) &
+        (green_channel >= 50)
+    )
+    yellow = (
+        (green_channel > blue_channel + 10) &
+        (red_channel >= green_channel * 0.25) &
+        (red_channel >= 35) & (green_channel >= 45)
+    )
+    orange = (
+        (hue >= 10) & (hue <= 25) &
+        (saturation >= 60) & (value >= 80)
+    )
+    red = (
+        ((hue < 10) | (hue > 170)) &
+        (saturation >= 60) & (value >= 80)
+    )
+    black = value < 25
 
     total_pixels = frame.shape[0] * frame.shape[1]
 
-    if cv2.countNonZero(green.astype(np.uint8)) / total_pixels > 0.05:
-        return 0.0
-    if cv2.countNonZero(yellow.astype(np.uint8)) / total_pixels > 0.08:
-        return 0.25
-    if cv2.countNonZero(orange.astype(np.uint8)) / total_pixels > 0.08:
-        return 0.5
-    if cv2.countNonZero(red.astype(np.uint8)) / total_pixels > 0.08:
-        return 0.75
-    if cv2.countNonZero(black.astype(np.uint8)) / total_pixels > 0.08:
-        return 1.0
+    return {
+        "green": cv2.countNonZero(green.astype(np.uint8)) / total_pixels,
+        "yellow": cv2.countNonZero(yellow.astype(np.uint8)) / total_pixels,
+        "orange": cv2.countNonZero(orange.astype(np.uint8)) / total_pixels,
+        "red": cv2.countNonZero(red.astype(np.uint8)) / total_pixels,
+        "black": cv2.countNonZero(black.astype(np.uint8)) / total_pixels,
+    }
 
-    return 0.0
+
+def detect_head_damage(frame):
+    percentages = get_colour_percentages(frame)
+
+    if not percentages:
+        return None
+
+    if percentages["yellow"] > 0.08:
+        return 0.25
+    if percentages["orange"] > 0.08:
+        return 0.5
+    if percentages["red"] > 0.08:
+        return 0.75
+    if percentages["black"] > 0.08:
+        return 1.0
+    if percentages["green"] > 0.05:
+        return 0.0
+
+    return None
 
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
@@ -100,6 +146,10 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
         screen_width,
         screen_height
     )
+    scaled_head_detection_region = inset_region(
+        scaled_head_region,
+        DETECTION_INSET
+    )
 
     overlay = create_detection_overlay(
         [scaled_head_region, scaled_torso_region],
@@ -109,14 +159,30 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
 
     try:
         while True:
-            frame = camera.grab(region=scaled_head_region)
+            frame = camera.grab(region=scaled_head_detection_region)
 
             if frame is not None:
+                percentages = get_colour_percentages(frame)
                 level = detect_head_damage(frame)
-                print(f"Head damage level: {level:.2f}")
+                damage_colours = {
+                    0.0: "green",
+                    0.25: "yellow",
+                    0.5: "orange",
+                    0.75: "red",
+                    1.0: "black",
+                }
+                colour = damage_colours.get(level, "unknown")
+                print(
+                    f"Head: {colour} | "
+                    f"green={percentages['green']:.1%}, "
+                    f"yellow={percentages['yellow']:.1%}, "
+                    f"orange={percentages['orange']:.1%}, "
+                    f"red={percentages['red']:.1%}, "
+                    f"black={percentages['black']:.1%}"
+                )
 
             overlay.update()
-            time.sleep(0.25)
+            time.sleep(0.5)
 
     except KeyboardInterrupt:
         print("Stopped")
