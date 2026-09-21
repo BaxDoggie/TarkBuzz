@@ -88,22 +88,17 @@ def get_colour_percentages(frame):
         (green_channel > 150) &
         (blue_channel < 100)
     )
-    orange = (
-        (hue >= 10) & (hue <= 25) &
-        (saturation >= 60) & (value >= 80)
-    )
     red = (
-        ((hue < 10) | (hue > 170)) &
+        ((hue < 25) | (hue > 170)) &
         (saturation >= 60) & (value >= 80)
     )
-    black = value < 25
+    black = (value < 90) & (saturation < 50)
 
     total_pixels = frame.shape[0] * frame.shape[1]
 
     return {
         "green": cv2.countNonZero(green.astype(np.uint8)) / total_pixels,
         "yellow": cv2.countNonZero(yellow.astype(np.uint8)) / total_pixels,
-        "orange": cv2.countNonZero(orange.astype(np.uint8)) / total_pixels,
         "red": cv2.countNonZero(red.astype(np.uint8)) / total_pixels,
         "black": cv2.countNonZero(black.astype(np.uint8)) / total_pixels,
     }
@@ -132,16 +127,20 @@ def detect_head_damage(frame):
     if not percentages:
         return None
 
-    if percentages["yellow"] > 0.08:
-        return 0.25
-    if percentages["orange"] > 0.08:
-        return 0.5
-    if percentages["red"] > 0.08:
-        return 0.75
-    if percentages["black"] > 0.08:
-        return 1.0
-    if percentages["green"] > 0.05:
-        return 0.0
+    candidates = {
+        0.0: (percentages["green"], 0.05),
+        0.25: (percentages["yellow"], 0.08),
+        0.5: (percentages["red"], 0.08),
+        1.0: (percentages["black"], 0.08),
+    }
+    qualifying = {
+        level: percentage
+        for level, (percentage, threshold) in candidates.items()
+        if percentage > threshold
+    }
+
+    if qualifying:
+        return max(qualifying, key=qualifying.get)
 
     return None
 
@@ -184,8 +183,7 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                 damage_colours = {
                     0.0: "green",
                     0.25: "yellow",
-                    0.5: "orange",
-                    0.75: "red",
+                    0.5: "red",
                     1.0: "black",
                 }
                 colour = damage_colours.get(level, "unknown")
@@ -193,7 +191,6 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                     f"Head: {colour} | "
                     f"green={percentages['green']:.1%}, "
                     f"yellow={percentages['yellow']:.1%}, "
-                    f"orange={percentages['orange']:.1%}, "
                     f"red={percentages['red']:.1%}, "
                     f"black={percentages['black']:.1%} | "
                     f"{get_colour_diagnostics(frame)}"
