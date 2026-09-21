@@ -11,7 +11,7 @@ REFERENCE_HEIGHT = 1440
 
 
 HEAD_REGION = (80, 30, 120, 72)  # (left, top, right, bottom)
-TORSO_REGION = (80, 130, 120, 172)  # (left, top, right, bottom)
+TORSO_REGION = (75, 81, 111, 119)  # 10 left, 40 up
 
 camera = dxcam.create()
 
@@ -95,8 +95,14 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
         screen_height
     )
 
+    scaled_torso_region = scale_region(
+        TORSO_REGION,
+        screen_width,
+        screen_height
+    )
+
     overlay = create_detection_overlay(
-        scaled_head_region,
+        [scaled_head_region, scaled_torso_region],
         screen_width,
         screen_height
     )
@@ -119,9 +125,7 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
         overlay.destroy()
 
 
-def create_detection_overlay(region, screen_width, screen_height):
-    left, top, right, bottom = region
-
+def create_detection_overlay(regions, screen_width, screen_height):
     root = tk.Tk()
     root.overrideredirect(True)
     root.attributes("-topmost", True)
@@ -137,14 +141,19 @@ def create_detection_overlay(region, screen_width, screen_height):
     )
     canvas.pack()
 
-    canvas.create_rectangle(
-        left,
-        top,
-        right,
-        bottom,
-        outline="lime",
-        width=4
-    )
+    colors = ["lime", "cyan"]
+
+    for region, color in zip(regions, colors):
+        left, top, right, bottom = region
+
+        canvas.create_rectangle(
+            left,
+            top,
+            right,
+            bottom,
+            outline=color,
+            width=4
+        )
 
     # Make the overlay click-through and prevent it taking focus
     hwnd = ctypes.windll.user32.GetParent(root.winfo_id())
