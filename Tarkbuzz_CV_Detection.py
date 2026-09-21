@@ -13,6 +13,8 @@ REFERENCE_HEIGHT = 1440
 HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 81, 111, 119)  # 10 left, 40 up
 DETECTION_INSET = 4
+MIN_COLOUR_PERCENTAGE = 0.02
+UNKNOWN_HOLD_SAMPLES = 3
 
 camera = dxcam.create(output_color="BGR")
 
@@ -128,19 +130,15 @@ def detect_head_damage(frame):
         return None
 
     candidates = {
-        0.0: (percentages["green"], 0.05),
-        0.25: (percentages["yellow"], 0.08),
-        0.5: (percentages["red"], 0.08),
-        1.0: (percentages["black"], 0.08),
+        0.0: percentages["green"],
+        0.25: percentages["yellow"],
+        0.5: percentages["red"],
+        1.0: percentages["black"],
     }
-    qualifying = {
-        level: percentage
-        for level, (percentage, threshold) in candidates.items()
-        if percentage > threshold
-    }
+    level, percentage = max(candidates.items(), key=lambda item: item[1])
 
-    if qualifying:
-        return max(qualifying, key=qualifying.get)
+    if percentage >= MIN_COLOUR_PERCENTAGE:
+        return level
 
     return None
 
@@ -172,6 +170,8 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
         screen_width,
         screen_height
     )
+    last_level = None
+    unknown_samples = 0
 
     try:
         while True:
@@ -179,7 +179,18 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
 
             if frame is not None:
                 percentages = get_colour_percentages(frame)
-                level = detect_head_damage(frame)
+                detected_level = detect_head_damage(frame)
+                if detected_level is None:
+                    unknown_samples += 1
+                    level = (
+                        last_level
+                        if last_level is not None and unknown_samples <= UNKNOWN_HOLD_SAMPLES
+                        else None
+                    )
+                else:
+                    last_level = detected_level
+                    unknown_samples = 0
+                    level = detected_level
                 damage_colours = {
                     0.0: "green",
                     0.25: "yellow",
