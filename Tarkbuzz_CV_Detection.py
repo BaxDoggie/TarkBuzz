@@ -15,6 +15,7 @@ TORSO_REGION = (75, 81, 111, 119)  # 10 left, 40 up
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 UNKNOWN_HOLD_SAMPLES = 3
+COLOUR_CHANGE_SAMPLES = 2
 
 camera = dxcam.create(output_color="BGR")
 
@@ -94,7 +95,7 @@ def get_colour_percentages(frame):
         ((hue < 25) | (hue > 170)) &
         (saturation >= 60) & (value >= 80)
     )
-    black = (value < 90) & (saturation < 50)
+    black = (value < 130) & (saturation < 80)
 
     total_pixels = frame.shape[0] * frame.shape[1]
 
@@ -172,6 +173,8 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
     )
     last_level = None
     unknown_samples = 0
+    pending_level = None
+    pending_samples = 0
 
     try:
         while True:
@@ -188,9 +191,23 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                         else None
                     )
                 else:
-                    last_level = detected_level
                     unknown_samples = 0
-                    level = detected_level
+                    if detected_level == last_level:
+                        pending_level = None
+                        pending_samples = 0
+                    else:
+                        if detected_level == pending_level:
+                            pending_samples += 1
+                        else:
+                            pending_level = detected_level
+                            pending_samples = 1
+
+                        if pending_samples >= COLOUR_CHANGE_SAMPLES:
+                            last_level = detected_level
+                            pending_level = None
+                            pending_samples = 0
+
+                    level = last_level
                 damage_colours = {
                     0.0: "green",
                     0.25: "yellow",
