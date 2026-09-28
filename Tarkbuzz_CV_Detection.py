@@ -87,12 +87,11 @@ def get_colour_percentages(frame):
         (green_channel >= 50)
     )
     yellow = (
-        (red_channel > 150) &
-        (green_channel > 150) &
-        (blue_channel < 100)
+        (hue >= 10) & (hue <= 35) &
+        (saturation >= 60) & (value >= 80)
     )
     red = (
-        ((hue < 25) | (hue > 170)) &
+        ((hue < 10) | (hue > 170)) &
         (saturation >= 60) & (value >= 80)
     )
     black = (value < 130) & (saturation < 80)
