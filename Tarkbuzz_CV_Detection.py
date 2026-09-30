@@ -160,8 +160,8 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
         screen_width,
         screen_height
     )
-    scaled_head_detection_region = inset_region(
-        scaled_head_region,
+    scaled_torso_detection_region = inset_region(
+        scaled_torso_region,
         DETECTION_INSET
     )
 
@@ -177,7 +177,7 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
 
     try:
         while True:
-            frame = camera.grab(region=scaled_head_detection_region)
+            frame = camera.grab(region=scaled_torso_detection_region)
 
             if frame is not None:
                 percentages = get_colour_percentages(frame)
@@ -215,7 +215,7 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                 }
                 colour = damage_colours.get(level, "unknown")
                 print(
-                    f"Head: {colour} | "
+                    f"Torso: {colour} | "
                     f"green={percentages['green']:.1%}, "
                     f"yellow={percentages['yellow']:.1%}, "
                     f"red={percentages['red']:.1%}, "
