@@ -2,13 +2,35 @@ import asyncio
 from buttplug.client import ButtplugClient
 from buttplug import DeviceOutputCommand
 from buttplug import OutputType
+import cv2
 import mss
-from PIL import Image
-import io
+import numpy as np
 
 
 Reference_screen_width = 3440
 Reference_screen_height = 1440
+
+# Head and thorax use the tuned CV-test regions; other ROIs start from the old sample coordinates.
+LIMB_REGIONS = {
+    "head": (80, 30, 118, 72),
+    "thorax": (75, 81, 111, 119),
+    "stomach": (81, 179, 119, 221),
+    "right_arm": (31, 129, 69, 171),
+    "left_arm": (131, 129, 169, 171),
+    "right_leg": (31, 229, 69, 271),
+    "left_leg": (131, 229, 169, 271),
+}
+MIN_COLOUR_PERCENTAGE = 0.02
+UNKNOWN_HOLD_SAMPLES = 3
+COLOUR_CHANGE_SAMPLES = 2
+DETECTED_COLOUR_RGB = {
+    "green": (0, 255, 0),
+    "yellow": (255, 255, 0),
+    "red": (255, 0, 0),
+    "black": (0, 0, 0),
+}
+UNKNOWN_COLOUR_RGB = (255, 255, 255)
+_limb_detection_states = {}
 
 
 
@@ -31,14 +53,18 @@ def get_screen_resolution():
         monitor = sct.monitors[1]  # Primary monitor
         return monitor["width"], monitor["height"]
 
-def scale_coordinates(x, y):
-    actual_width, actual_height = get_screen_resolution()
+def scale_coordinates(x, y, actual_width=None, actual_height=None):
+    if actual_width is None or actual_height is None:
+        actual_width, actual_height = get_screen_resolution()
     scaled_x = int(x * actual_width / Reference_screen_width)
     scaled_y = int(y * actual_height / Reference_screen_height)
     return {"left": round(scaled_x), "top": round(scaled_y)}
 
-def get_scaled_limb_locations():
+def get_scaled_limb_locations(actual_width=None, actual_height=None):
     """Return a dictionary of limb locations scaled to the current screen resolution."""
+    if actual_width is None or actual_height is None:
+        actual_width, actual_height = get_screen_resolution()
+
     limb_locations = {
         "head": {"left": 96, "top": 31},            
         "thorax": {"left": 100, "top": 150},        
@@ -53,29 +79,145 @@ def get_scaled_limb_locations():
         "dead_alt": {"left": 1770, "top": 1328},
     }
     
-    scaled_locations = {limb: scale_coordinates(pos["left"], pos["top"]) for limb, pos in limb_locations.items()}
+    scaled_locations = {
+        limb: scale_coordinates(pos["left"], pos["top"], actual_width, actual_height)
+        for limb, pos in limb_locations.items()
+    }
     return scaled_locations
+
+def scale_region(region, actual_width, actual_height):
+    left, top, right, bottom = region
+    scale_x = actual_width / Reference_screen_width
+    scale_y = actual_height / Reference_screen_height
+    return (
+        int(left * scale_x),
+        int(top * scale_y),
+        int(right * scale_x),
+        int(bottom * scale_y),
+    )
+
+
+def get_colour_percentages(frame):
+    if frame is None or frame.size == 0:
+        return {}
+
+    if frame.shape[-1] == 4:
+        frame = cv2.cvtColor(frame, cv2.COLOR_BGRA2BGR)
+
+    rgb = cv2.cvtColor(frame, cv2.COLOR_BGR2RGB)
+    r, g, b = cv2.split(rgb)
+    hue, saturation, value = cv2.split(cv2.cvtColor(frame, cv2.COLOR_BGR2HSV))
+    red_channel = r.astype(np.int16)
+    green_channel = g.astype(np.int16)
+    blue_channel = b.astype(np.int16)
+
+    green = (
+        (green_channel > red_channel + 20) &
+        (green_channel > blue_channel + 20) &
+        (green_channel >= 50)
+    )
+    yellow = (
+        (hue >= 10) & (hue <= 35) &
+        (saturation >= 60) & (value >= 80)
+    )
+    red = (
+        ((hue < 10) | (hue > 170)) &
+        (saturation >= 60) & (value >= 80)
+    )
+    black = (value < 130) & (saturation < 80)
+
+    total_pixels = frame.shape[0] * frame.shape[1]
+    return {
+        "green": cv2.countNonZero(green.astype(np.uint8)) / total_pixels,
+        "yellow": cv2.countNonZero(yellow.astype(np.uint8)) / total_pixels,
+        "red": cv2.countNonZero(red.astype(np.uint8)) / total_pixels,
+        "black": cv2.countNonZero(black.astype(np.uint8)) / total_pixels,
+    }
+
+
+def detect_limb_colour(frame, limb):
+    percentages = get_colour_percentages(frame)
+
+    detected_colour = None
+    if percentages:
+        colour, percentage = max(percentages.items(), key=lambda item: item[1])
+        if percentage >= MIN_COLOUR_PERCENTAGE:
+            detected_colour = colour
+
+    state = _limb_detection_states.setdefault(
+        limb,
+        {"last": None, "unknown_samples": 0, "pending": None, "pending_samples": 0},
+    )
+
+    if detected_colour is None:
+        state["unknown_samples"] += 1
+        current_colour = (
+            state["last"]
+            if state["last"] is not None
+            and state["unknown_samples"] <= UNKNOWN_HOLD_SAMPLES
+            else None
+        )
+    else:
+        state["unknown_samples"] = 0
+        if detected_colour == state["last"]:
+            state["pending"] = None
+            state["pending_samples"] = 0
+        else:
+            if detected_colour == state["pending"]:
+                state["pending_samples"] += 1
+            else:
+                state["pending"] = detected_colour
+                state["pending_samples"] = 1
+
+            if state["pending_samples"] >= COLOUR_CHANGE_SAMPLES:
+                state["last"] = detected_colour
+                state["pending"] = None
+                state["pending_samples"] = 0
+
+        current_colour = state["last"]
+
+    return DETECTED_COLOUR_RGB.get(current_colour, UNKNOWN_COLOUR_RGB)
 
 
 def get_all_limb_colors():
-    limb_locations = get_scaled_limb_locations()
-
     with mss.mss() as sct:
+        monitor = sct.monitors[1]
+        screenshot = sct.grab(monitor)
+        screen = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
+            screenshot.height,
+            screenshot.width,
+            4,
+        )
+        screen = cv2.cvtColor(screen, cv2.COLOR_BGRA2BGR)
+        limb_locations = get_scaled_limb_locations(
+            monitor["width"],
+            monitor["height"],
+        )
         colors = {}
-        for limb, position in limb_locations.items():
-            box = {
-                "left": position["left"],
-                "top": position["top"],
-                "width": 3,
-                "height": 3
-            }
-            screenshot = sct.grab(box)
-            img = Image.frombytes("RGB", screenshot.size, screenshot.rgb)
-            pixels = list(img.getdata())
-            avg_r = sum(p[0] for p in pixels) // len(pixels)
-            avg_g = sum(p[1] for p in pixels) // len(pixels)
-            avg_b = sum(p[2] for p in pixels) // len(pixels)
-            colors[limb] = (avg_r, avg_g, avg_b)
+
+        for limb, reference_region in LIMB_REGIONS.items():
+            left, top, right, bottom = scale_region(
+                reference_region,
+                monitor["width"],
+                monitor["height"],
+            )
+            roi = screen[top:bottom, left:right]
+            colors[limb] = detect_limb_colour(roi, limb)
+
+        control_locations = ("inventory", "inventory_alt", "dead", "dead_alt")
+        for control in control_locations:
+            position = limb_locations[control]
+            left = position["left"]
+            top = position["top"]
+            sample = screen[top:top + 3, left:left + 3]
+            if sample.size:
+                rgb_sample = cv2.cvtColor(sample, cv2.COLOR_BGR2RGB)
+                colors[control] = tuple(
+                    int(channel)
+                    for channel in rgb_sample.mean(axis=(0, 1))
+                )
+            else:
+                colors[control] = UNKNOWN_COLOUR_RGB
 
         return colors
 
@@ -258,8 +400,7 @@ def calculate_damage_level(colors):
 
 
 async def main():
-    # Test mode - just testing head color detection
-    print("HEAD COLOR DETECTION TEST")
+    print("CV LIMB COLOR DETECTION TEST")
     print("Press Ctrl+C to stop")
     
     
