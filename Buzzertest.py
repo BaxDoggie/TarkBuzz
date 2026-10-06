@@ -39,7 +39,6 @@ _limb_detection_states = {}
 #default vibration levels for each color
 green_limb = 0.0
 yellow_limb = 0.25
-orange_limb = 0.5
 red_limb = 0.75
 black_limb = 1.0
 
