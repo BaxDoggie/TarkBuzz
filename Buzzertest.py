@@ -10,6 +10,7 @@ import numpy as np
 
 Reference_screen_width = 3440
 Reference_screen_height = 1440
+DETECTION_INSET = 4
 
 CV_LIMB_REGIONS = {
     "head": (80, 30, 118, 72),
@@ -62,6 +63,11 @@ def scale_region(region, actual_width, actual_height):
         int(right * scale_x),
         int(bottom * scale_y),
     )
+
+
+def inset_region(region, inset):
+    left, top, right, bottom = region
+    return left + inset, top + inset, right - inset, bottom - inset
 
 
 def get_colour_percentages(frame):
@@ -151,7 +157,8 @@ def get_all_limb_colors():
     colors = {limb: None for limb in PLACEHOLDER_LIMBS}
 
     for limb, reference_region in CV_LIMB_REGIONS.items():
-        detection_region = scale_region(reference_region, screen_width, screen_height)
+        scaled_region = scale_region(reference_region, screen_width, screen_height)
+        detection_region = inset_region(scaled_region, DETECTION_INSET)
         frame = camera.grab(region=detection_region)
         colors[limb] = detect_limb_colour(frame, limb)
 
