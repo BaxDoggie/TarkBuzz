@@ -3,23 +3,20 @@ from buttplug.client import ButtplugClient
 from buttplug import DeviceOutputCommand
 from buttplug import OutputType
 import cv2
-import mss
+import ctypes
+import dxcam
 import numpy as np
 
 
 Reference_screen_width = 3440
 Reference_screen_height = 1440
+DETECTION_INSET = 4
 
-# Head and thorax use the tuned CV-test regions; other ROIs start from the old sample coordinates.
-LIMB_REGIONS = {
+CV_LIMB_REGIONS = {
     "head": (80, 30, 118, 72),
     "thorax": (75, 81, 111, 119),
-    "stomach": (81, 179, 119, 221),
-    "right_arm": (31, 129, 69, 171),
-    "left_arm": (131, 129, 169, 171),
-    "right_leg": (31, 229, 69, 271),
-    "left_leg": (131, 229, 169, 271),
 }
+PLACEHOLDER_LIMBS = ("stomach", "right_arm", "left_arm", "right_leg", "left_leg")
 MIN_COLOUR_PERCENTAGE = 0.02
 UNKNOWN_HOLD_SAMPLES = 3
 COLOUR_CHANGE_SAMPLES = 2
@@ -29,7 +26,12 @@ DETECTED_COLOUR_RGB = {
     "red": (255, 0, 0),
     "black": (0, 0, 0),
 }
-UNKNOWN_COLOUR_RGB = (255, 255, 255)
+COLOUR_LEVELS = {
+    DETECTED_COLOUR_RGB["green"]: 0.0,
+    DETECTED_COLOUR_RGB["yellow"]: 0.25,
+    DETECTED_COLOUR_RGB["red"]: 0.75,
+    DETECTED_COLOUR_RGB["black"]: 1.0,
+}
 _limb_detection_states = {}
 
 
@@ -41,49 +43,16 @@ orange_limb = 0.5
 red_limb = 0.75
 black_limb = 1.0
 
-# Track vibration level before inventory opened
 _last_vibration_level = 0.0
-_dead_override_active = True  # Start dead, assume player is not in raid when started (should figure itself out if player is in raid)
-_inventory_override_active = False  # Track if inventory is open to pause vibration
+camera = dxcam.create(output_color="BGR")
 
 
 def get_screen_resolution():
-    """Get the current screen resolution."""
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]  # Primary monitor
-        return monitor["width"], monitor["height"]
+    return (
+        ctypes.windll.user32.GetSystemMetrics(0),
+        ctypes.windll.user32.GetSystemMetrics(1),
+    )
 
-def scale_coordinates(x, y, actual_width=None, actual_height=None):
-    if actual_width is None or actual_height is None:
-        actual_width, actual_height = get_screen_resolution()
-    scaled_x = int(x * actual_width / Reference_screen_width)
-    scaled_y = int(y * actual_height / Reference_screen_height)
-    return {"left": round(scaled_x), "top": round(scaled_y)}
-
-def get_scaled_limb_locations(actual_width=None, actual_height=None):
-    """Return a dictionary of limb locations scaled to the current screen resolution."""
-    if actual_width is None or actual_height is None:
-        actual_width, actual_height = get_screen_resolution()
-
-    limb_locations = {
-        "head": {"left": 96, "top": 31},            
-        "thorax": {"left": 100, "top": 150},        
-        "stomach": {"left": 100, "top": 200},        
-        "right_arm": {"left": 50, "top": 150},       
-        "left_arm": {"left": 150, "top": 150},      
-        "right_leg": {"left": 50, "top": 250},       
-        "left_leg": {"left": 150, "top": 250},
-        "inventory": {"left": 1074, "top": 875},
-        "inventory_alt": {"left": 40, "top": 1357},
-        "dead": {"left": 1713, "top": 52},
-        "dead_alt": {"left": 1770, "top": 1328},
-    }
-    
-    scaled_locations = {
-        limb: scale_coordinates(pos["left"], pos["top"], actual_width, actual_height)
-        for limb, pos in limb_locations.items()
-    }
-    return scaled_locations
 
 def scale_region(region, actual_width, actual_height):
     left, top, right, bottom = region
@@ -95,6 +64,11 @@ def scale_region(region, actual_width, actual_height):
         int(right * scale_x),
         int(bottom * scale_y),
     )
+
+
+def inset_region(region, inset):
+    left, top, right, bottom = region
+    return left + inset, top + inset, right - inset, bottom - inset
 
 
 def get_colour_percentages(frame):
@@ -176,132 +150,28 @@ def detect_limb_colour(frame, limb):
 
         current_colour = state["last"]
 
-    return DETECTED_COLOUR_RGB.get(current_colour, UNKNOWN_COLOUR_RGB)
+    return DETECTED_COLOUR_RGB.get(current_colour)
 
 
 def get_all_limb_colors():
-    with mss.mss() as sct:
-        monitor = sct.monitors[1]
-        screenshot = sct.grab(monitor)
-        screen = np.frombuffer(screenshot.bgra, dtype=np.uint8).reshape(
-            screenshot.height,
-            screenshot.width,
-            4,
+    screen_width, screen_height = get_screen_resolution()
+    colors = {limb: None for limb in PLACEHOLDER_LIMBS}
+
+    for limb, reference_region in CV_LIMB_REGIONS.items():
+        scaled_region = scale_region(reference_region, screen_width, screen_height)
+        detection_region = inset_region(
+            scaled_region,
+            DETECTION_INSET,
         )
-        screen = cv2.cvtColor(screen, cv2.COLOR_BGRA2BGR)
-        limb_locations = get_scaled_limb_locations(
-            monitor["width"],
-            monitor["height"],
-        )
-        colors = {}
+        frame = camera.grab(region=detection_region)
+        colors[limb] = detect_limb_colour(frame, limb)
 
-        for limb, reference_region in LIMB_REGIONS.items():
-            left, top, right, bottom = scale_region(
-                reference_region,
-                monitor["width"],
-                monitor["height"],
-            )
-            roi = screen[top:bottom, left:right]
-            colors[limb] = detect_limb_colour(roi, limb)
-
-        control_locations = ("inventory", "inventory_alt", "dead", "dead_alt")
-        for control in control_locations:
-            position = limb_locations[control]
-            left = position["left"]
-            top = position["top"]
-            sample = screen[top:top + 3, left:left + 3]
-            if sample.size:
-                rgb_sample = cv2.cvtColor(sample, cv2.COLOR_BGR2RGB)
-                colors[control] = tuple(
-                    int(channel)
-                    for channel in rgb_sample.mean(axis=(0, 1))
-                )
-            else:
-                colors[control] = UNKNOWN_COLOUR_RGB
-
-        return colors
-
-def is_red(rgb_color, red_threshold=150, tolerance=100):
-    """
-    Detect if a color is red.
-    Red should have high R value, low G and B values.
-    red_threshold: minimum value for red channel (0-255)
-    tolerance: how much G and B can deviate from 0
-    """
-    r, g, b = rgb_color
-    
-    # Red detection: R is high, G and B are low
-    return (r > red_threshold and 
-            g < tolerance and 
-            b < tolerance)
-
-def is_yellow(rgb_color, red_threshold=150, green_threshold=150, tolerance=100):
-    """
-    Detect if a color is yellow.
-    Yellow should have high R and G values, low B value.
-    red_threshold: minimum value for red channel (0-255)
-    green_threshold: minimum value for green channel (0-255)
-    tolerance: how much B can deviate from 0
-    """
-    r, g, b = rgb_color
-    
-    # Yellow detection: R and G are high, B is low
-    return (r > red_threshold and 
-            g > green_threshold and 
-            b < tolerance)
-
-def is_green(rgb_color, green_threshold=145, tolerance=45):
-    r, g, b = rgb_color
-    return (g > green_threshold and 
-            r < tolerance and 
-            b < tolerance)
-
-def is_orange(rgb_color, red_threshold=150, green_threshold=100, tolerance=100):
-    r, g, b = rgb_color
-    # Orange detection: R is high, G is moderate, B is low
-    return (r > red_threshold and 
-            g > green_threshold and 
-            b < tolerance)
-
-def is_black(rgb_color, threshold=50):
-    r, g, b = rgb_color
-    # Black detection: R, G, and B are all low
-    return (r < threshold and 
-            g < threshold and 
-            b < threshold)
-
-def is_white(rgb_color, white_threshold=225):
-    r, g, b = rgb_color
-    return (r > white_threshold and 
-            g > white_threshold and 
-            b > white_threshold)
-
-
-
-
-
-    
-
-
+    return colors
 
 def get_damage_level_for_color(color):
-    if is_green(color):
-        print("Green detected - stopping vibration")
-        return green_limb
-    if is_yellow(color):
-        print("Yellow detected - low vibration")
-        return yellow_limb
-    if is_orange(color):
-        print("Orange detected - medium vibration")
-        return orange_limb
-    if is_red(color):
-        print("Red detected - high vibration")
-        return red_limb
-    if is_black(color):
-        print("Black detected - critical vibration")
-        return black_limb
-    print("No damage detected")
-    return 0.0
+    if color is None:
+        return 0.0
+    return COLOUR_LEVELS.get(tuple(color), 0.0)
 
 
 def head(color):
@@ -332,21 +202,6 @@ def LeftLeg(color):
     return get_damage_level_for_color(color)
         
 
-def inventory_open(color, inventory_alt_color):
-    return is_white(color) and not is_white(inventory_alt_color)
-
-
-
-
-
-
-def handle_inventory(inventory_color, inventory_alt_color):
-    global _inventory_override_active
-    if inventory_open(inventory_color, inventory_alt_color):
-        _inventory_override_active = True
-        return _last_vibration_level
-    _inventory_override_active = False
-    return None
 
 
 
@@ -355,32 +210,6 @@ def handle_inventory(inventory_color, inventory_alt_color):
 
 
 
-def dead(color, secondary_color, head_color):
-    global _dead_override_active
-    if is_white(color) and is_white(secondary_color) and head(head_color) == black_limb:
-        print("Dead detected - stopping vibration")
-        _dead_override_active = True
-        return 0.0
-    if _dead_override_active:
-        return 0.0
-    return None
-
-
-
-
-
-def alive(head_color, left_leg_color, right_leg_color):
-    global _dead_override_active
-
-    if not _dead_override_active:
-        return False  # Already alive
-
-    if head(head_color) != black_limb and LeftLeg(left_leg_color) != black_limb and RightLeg(right_leg_color) != black_limb:
-        print("Player alive - resuming normal detector flow")
-        _dead_override_active = False
-        return True
-    
-    return False
 
 
 def calculate_damage_level(colors):
@@ -408,39 +237,9 @@ async def main():
     try:
         while True:
             colors = get_all_limb_colors()
-
-            # If we are in dead override, only check alive
-            if _dead_override_active:
-                if alive(colors["head"], colors["left_leg"], colors["right_leg"]):
-                    print("Alive detected, resuming normal detection")
-                else:
-                    print("Still dead; skipping limb detection")
-                    await asyncio.sleep(0.5)
-                    continue
-
-
-            inventory_result = handle_inventory(colors["inventory"], colors["inventory_alt"])
-            if inventory_result is not None:
-                print("Inventory open - pausing limb/vibration detection")
-                await asyncio.sleep(0.5)
-                continue
-
-
-
-            # Normal mode: check if we died again
-            dead_result = dead(colors["dead"], colors["dead_alt"], colors["head"])
-            print(f"Dead samples: {colors['dead']} / {colors['dead_alt']}")
-            print(f"Dead detector result: {dead_result}")
-
-            if dead_result == 0.0:
-                print("Dead detected - pausing limb/vibration detection")
-                await asyncio.sleep(0.5)
-                continue
-
-            # Normal limb detection here
             damage_level = calculate_damage_level(colors)
             print(f"Calculated normal vibration level: {damage_level:.2f}")
-            print(f"Sampled limb colors: {colors}")
+            print(f"CV limb colors: {colors}")
 
             await asyncio.sleep(0.5)
             
@@ -455,19 +254,13 @@ async def main():
 if __name__ == "__main__":    asyncio.run(main())
 
 
-# Helper for external modules (GUI) to evaluate vibration level from limb name and sampled color
+# Helper for external modules to map CV-classified limb colours to vibration levels.
 def get_vibration_for_limb(limb_name, color):
-    """Return vibration level (0.0-1.0) for a limb given its RGB color tuple.
+    """Return the vibration level for a CV-classified limb colour.
 
     limb_name: one of 'head','thorax','stomach','right_arm','left_arm','right_leg','left_leg'
-    color: (r,g,b)
+    color: canonical RGB tuple, or None when unknown/unimplemented
     """
-    global _dead_override_active, _inventory_override_active
-    if _dead_override_active:
-        return 0.0
-    if _inventory_override_active:
-        return _last_vibration_level
-
     mapping = {
         "head": head,
         "thorax": Thorax,
