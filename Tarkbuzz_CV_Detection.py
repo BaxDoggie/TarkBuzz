@@ -11,9 +11,13 @@ REFERENCE_HEIGHT = 1440
 
 
 HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
-TORSO_REGION = (75, 95, 111, 133)
+TORSO_REGION = (75, 75, 111, 113)
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
+TORSO_MIN_COLOUR_PERCENTAGE = 0.005
+TORSO_YELLOW_HUE_RANGE = (10, 45)
+TORSO_YELLOW_MIN_SATURATION = 40
+TORSO_YELLOW_MIN_VALUE = 40
 UNKNOWN_HOLD_SAMPLES = 3
 COLOUR_CHANGE_SAMPLES = 2
 
@@ -66,7 +70,7 @@ def damage_colour(frame, lower_hsv, upper_hsv):
 
     return cv2.countNonZero(mask) / total
 
-def get_colour_percentages(frame):
+def get_colour_percentages(frame, torso=False):
     if frame is None or frame.size == 0:
         return {}
 
@@ -86,9 +90,18 @@ def get_colour_percentages(frame):
         (green_channel > blue_channel + 20) &
         (green_channel >= 50)
     )
+    if torso:
+        yellow_hue_min, yellow_hue_max = TORSO_YELLOW_HUE_RANGE
+        yellow_min_saturation = TORSO_YELLOW_MIN_SATURATION
+        yellow_min_value = TORSO_YELLOW_MIN_VALUE
+    else:
+        yellow_hue_min, yellow_hue_max = 10, 35
+        yellow_min_saturation = 60
+        yellow_min_value = 80
+
     yellow = (
-        (hue >= 10) & (hue <= 35) &
-        (saturation >= 60) & (value >= 80)
+        (hue >= yellow_hue_min) & (hue <= yellow_hue_max) &
+        (saturation >= yellow_min_saturation) & (value >= yellow_min_value)
     )
     red = (
         ((hue < 10) | (hue > 170)) &
@@ -123,8 +136,12 @@ def get_colour_diagnostics(frame):
     )
 
 
-def detect_head_damage(frame):
-    percentages = get_colour_percentages(frame)
+def detect_head_damage(
+    frame,
+    minimum_percentage=MIN_COLOUR_PERCENTAGE,
+    torso=False
+):
+    percentages = get_colour_percentages(frame, torso=torso)
 
     if not percentages:
         return None
@@ -137,7 +154,7 @@ def detect_head_damage(frame):
     }
     level, percentage = max(candidates.items(), key=lambda item: item[1])
 
-    if percentage >= MIN_COLOUR_PERCENTAGE:
+    if percentage >= minimum_percentage:
         return level
 
     return None
@@ -180,8 +197,12 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
             frame = camera.grab(region=scaled_torso_detection_region)
 
             if frame is not None:
-                percentages = get_colour_percentages(frame)
-                detected_level = detect_head_damage(frame)
+                percentages = get_colour_percentages(frame, torso=True)
+                detected_level = detect_head_damage(
+                    frame,
+                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE,
+                    torso=True
+                )
                 if detected_level is None:
                     unknown_samples += 1
                     level = (
@@ -214,12 +235,20 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                     1.0: "black",
                 }
                 colour = damage_colours.get(level, "unknown")
+                candidate_level, candidate_percentage = max(
+                    percentages.items(),
+                    key=lambda item: item[1]
+                )
+                candidate_colour = damage_colours[candidate_level]
                 print(
                     f"Torso: {colour} | "
-                    f"green={percentages['green']:.1%}, "
-                    f"yellow={percentages['yellow']:.1%}, "
-                    f"red={percentages['red']:.1%}, "
-                    f"black={percentages['black']:.1%} | "
+                    f"candidate={candidate_colour} ({candidate_percentage:.2%}; "
+                    f"minimum={TORSO_MIN_COLOUR_PERCENTAGE:.2%}) | "
+                    f"green={percentages['green']:.2%}, "
+                    f"yellow={percentages['yellow']:.2%}, "
+                    f"red={percentages['red']:.2%}, "
+                    f"black={percentages['black']:.2%} | "
+                    f"sample={frame.shape[1]}x{frame.shape[0]} | "
                     f"{get_colour_diagnostics(frame)}"
                 )
 
@@ -279,9 +308,6 @@ def create_detection_overlay(regions, screen_width, screen_height):
 
 if __name__ == "__main__":
     debug_head_loop()
-
-
-
 
 
 
