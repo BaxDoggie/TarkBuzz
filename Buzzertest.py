@@ -14,7 +14,7 @@ DETECTION_INSET = 4
 
 CV_LIMB_REGIONS = {
     "head": (80, 30, 118, 72),
-    "thorax": (75, 81, 111, 119),
+    "thorax": (75, 95, 111, 133),
 }
 PLACEHOLDER_LIMBS = ("stomach", "right_arm", "left_arm", "right_leg", "left_leg")
 MIN_COLOUR_PERCENTAGE = 0.02
