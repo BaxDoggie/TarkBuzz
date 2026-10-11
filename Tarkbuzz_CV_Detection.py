@@ -13,6 +13,7 @@ REFERENCE_HEIGHT = 1440
 HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 75, 111, 113)
 STOMACH_REGION = (70, 125, 116, 163)
+RIGHT_LEG_REGION = (102, 165, 122, 215)
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -188,22 +189,22 @@ def update_detection_state(state, detected_level):
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
-def debug_stomach_loop():
+def debug_right_leg_loop():
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
     screen_width, screen_height = get_screen_size()
-    scaled_stomach_region = scale_region(
-        STOMACH_REGION,
+    scaled_right_leg_region = scale_region(
+        RIGHT_LEG_REGION,
         screen_width,
         screen_height
     )
-    stomach_detection_region = inset_region(
-        scaled_stomach_region,
+    right_leg_detection_region = inset_region(
+        scaled_right_leg_region,
         DETECTION_INSET
     )
 
     overlay = create_detection_overlay(
-        [stomach_detection_region],
+        [right_leg_detection_region],
         screen_width,
         screen_height
     )
@@ -222,7 +223,7 @@ def debug_stomach_loop():
 
     try:
         while True:
-            frame = camera.grab(region=stomach_detection_region)
+            frame = camera.grab(region=right_leg_detection_region)
             if frame is not None:
                 percentages = get_colour_percentages(frame, torso=True)
                 detected_level = detect_head_damage(
@@ -237,7 +238,7 @@ def debug_stomach_loop():
                     key=lambda item: item[1]
                 )
                 print(
-                    f"Stomach: {colour} | "
+                    f"Right leg: {colour} | "
                     f"candidate={candidate_level} ({candidate_percentage:.2%}; "
                     f"minimum={TORSO_MIN_COLOUR_PERCENTAGE:.2%}) | "
                     f"green={percentages['green']:.2%}, "
@@ -303,4 +304,4 @@ def create_detection_overlay(regions, screen_width, screen_height):
 
 
 if __name__ == "__main__":
-    debug_stomach_loop()
+    debug_right_leg_loop()
