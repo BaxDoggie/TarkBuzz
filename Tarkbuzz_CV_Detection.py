@@ -225,11 +225,10 @@ def debug_right_leg_loop():
         while True:
             frame = camera.grab(region=right_leg_detection_region)
             if frame is not None:
-                percentages = get_colour_percentages(frame, torso=True)
+                percentages = get_colour_percentages(frame)
                 detected_level = detect_head_damage(
                     frame,
-                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE,
-                    torso=True
+                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE
                 )
                 level = update_detection_state(state, detected_level)
                 colour = damage_colours.get(level, "unknown")
