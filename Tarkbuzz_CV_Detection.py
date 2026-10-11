@@ -12,6 +12,7 @@ REFERENCE_HEIGHT = 1440
 
 HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 75, 111, 113)
+STOMACH_REGION = (70, 125, 116, 163)
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -160,42 +161,68 @@ def detect_head_damage(
     return None
 
 
+def update_detection_state(state, detected_level):
+    if detected_level is None:
+        state["unknown_samples"] += 1
+        if state["unknown_samples"] <= UNKNOWN_HOLD_SAMPLES:
+            return state["last_level"]
+        return None
+
+    state["unknown_samples"] = 0
+    if detected_level == state["last_level"]:
+        state["pending_level"] = None
+        state["pending_samples"] = 0
+    elif detected_level == state["pending_level"]:
+        state["pending_samples"] += 1
+    else:
+        state["pending_level"] = detected_level
+        state["pending_samples"] = 1
+
+    if state["pending_samples"] >= COLOUR_CHANGE_SAMPLES:
+        state["last_level"] = detected_level
+        state["pending_level"] = None
+        state["pending_samples"] = 0
+
+    return state["last_level"]
+
+
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
-def debug_head_loop(): #Shows damage level in terminal and overlays the detection areas on screen
+def debug_stomach_loop():
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
     screen_width, screen_height = get_screen_size()
-    scaled_head_region = scale_region(
-        HEAD_REGION,
+    scaled_stomach_region = scale_region(
+        STOMACH_REGION,
         screen_width,
         screen_height
     )
-
-    scaled_torso_region = scale_region(
-        TORSO_REGION,
-        screen_width,
-        screen_height
-    )
-    scaled_torso_detection_region = inset_region(
-        scaled_torso_region,
+    stomach_detection_region = inset_region(
+        scaled_stomach_region,
         DETECTION_INSET
     )
 
     overlay = create_detection_overlay(
-        [scaled_head_region, scaled_torso_region],
+        [stomach_detection_region],
         screen_width,
         screen_height
     )
-    last_level = None
-    unknown_samples = 0
-    pending_level = None
-    pending_samples = 0
+    state = {
+        "last_level": None,
+        "unknown_samples": 0,
+        "pending_level": None,
+        "pending_samples": 0,
+    }
+    damage_colours = {
+        0.0: "green",
+        0.25: "yellow",
+        0.5: "red",
+        1.0: "black",
+    }
 
     try:
         while True:
-            frame = camera.grab(region=scaled_torso_detection_region)
-
+            frame = camera.grab(region=stomach_detection_region)
             if frame is not None:
                 percentages = get_colour_percentages(frame, torso=True)
                 detected_level = detect_head_damage(
@@ -203,46 +230,15 @@ def debug_head_loop(): #Shows damage level in terminal and overlays the detectio
                     minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE,
                     torso=True
                 )
-                if detected_level is None:
-                    unknown_samples += 1
-                    level = (
-                        last_level
-                        if last_level is not None and unknown_samples <= UNKNOWN_HOLD_SAMPLES
-                        else None
-                    )
-                else:
-                    unknown_samples = 0
-                    if detected_level == last_level:
-                        pending_level = None
-                        pending_samples = 0
-                    else:
-                        if detected_level == pending_level:
-                            pending_samples += 1
-                        else:
-                            pending_level = detected_level
-                            pending_samples = 1
-
-                        if pending_samples >= COLOUR_CHANGE_SAMPLES:
-                            last_level = detected_level
-                            pending_level = None
-                            pending_samples = 0
-
-                    level = last_level
-                damage_colours = {
-                    0.0: "green",
-                    0.25: "yellow",
-                    0.5: "red",
-                    1.0: "black",
-                }
+                level = update_detection_state(state, detected_level)
                 colour = damage_colours.get(level, "unknown")
                 candidate_level, candidate_percentage = max(
                     percentages.items(),
                     key=lambda item: item[1]
                 )
-                candidate_colour = candidate_level
                 print(
-                    f"Torso: {colour} | "
-                    f"candidate={candidate_colour} ({candidate_percentage:.2%}; "
+                    f"Stomach: {colour} | "
+                    f"candidate={candidate_level} ({candidate_percentage:.2%}; "
                     f"minimum={TORSO_MIN_COLOUR_PERCENTAGE:.2%}) | "
                     f"green={percentages['green']:.2%}, "
                     f"yellow={percentages['yellow']:.2%}, "
@@ -278,7 +274,7 @@ def create_detection_overlay(regions, screen_width, screen_height):
     )
     canvas.pack()
 
-    colors = ["lime", "cyan"]
+    colors = ["orange"]
 
     for region, color in zip(regions, colors):
         left, top, right, bottom = region
@@ -307,8 +303,4 @@ def create_detection_overlay(regions, screen_width, screen_height):
 
 
 if __name__ == "__main__":
-    debug_head_loop()
-
-
-
-
+    debug_stomach_loop()
