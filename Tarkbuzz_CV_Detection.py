@@ -138,7 +138,7 @@ def get_colour_diagnostics(frame):
     )
 
 
-def detect_head_damage(
+def detect_damage_level(
     frame,
     minimum_percentage=MIN_COLOUR_PERCENTAGE,
     torso=False
@@ -226,7 +226,7 @@ def debug_right_leg_loop():
             frame = camera.grab(region=right_leg_detection_region)
             if frame is not None:
                 percentages = get_colour_percentages(frame)
-                detected_level = detect_head_damage(
+                detected_level = detect_damage_level(
                     frame,
                     minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE
                 )
