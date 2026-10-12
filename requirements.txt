@@ -1,6 +1,4 @@
 buttplug
-mss
-Pillow
 numpy
 opencv-python
 dxcam
