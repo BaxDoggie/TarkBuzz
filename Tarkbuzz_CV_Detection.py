@@ -15,6 +15,8 @@ TORSO_REGION = (75, 75, 111, 113)
 STOMACH_REGION = (70, 125, 116, 163)
 RIGHT_LEG_REGION = (110, 165, 130, 285)
 RIGHT_LEG_ANGLE_DEGREES = -12
+LEFT_LEG_REGION = (50, 165, 70, 285)
+LEFT_LEG_ANGLE_DEGREES = 12
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -264,35 +266,35 @@ def update_detection_state(state, detected_level):
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
-def debug_right_leg_loop():
+def debug_left_leg_loop():
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
     screen_width, screen_height = get_screen_size()
-    scaled_right_leg_region = scale_region(
-        RIGHT_LEG_REGION,
+    scaled_left_leg_region = scale_region(
+        LEFT_LEG_REGION,
         screen_width,
         screen_height
     )
-    right_leg_border_points = rotated_region_points(
-        scaled_right_leg_region,
-        RIGHT_LEG_ANGLE_DEGREES
+    left_leg_border_points = rotated_region_points(
+        scaled_left_leg_region,
+        LEFT_LEG_ANGLE_DEGREES
     )
-    right_leg_detection_region = inset_region(
-        scaled_right_leg_region,
+    left_leg_detection_region = inset_region(
+        scaled_left_leg_region,
         DETECTION_INSET
     )
-    right_leg_sample_points = rotated_region_points(
-        right_leg_detection_region,
-        RIGHT_LEG_ANGLE_DEGREES
+    left_leg_sample_points = rotated_region_points(
+        left_leg_detection_region,
+        LEFT_LEG_ANGLE_DEGREES
     )
-    right_leg_capture_region = points_bounds(right_leg_sample_points)
-    right_leg_sample_size = (
-        right_leg_detection_region[2] - right_leg_detection_region[0],
-        right_leg_detection_region[3] - right_leg_detection_region[1],
+    left_leg_capture_region = points_bounds(left_leg_sample_points)
+    left_leg_sample_size = (
+        left_leg_detection_region[2] - left_leg_detection_region[0],
+        left_leg_detection_region[3] - left_leg_detection_region[1],
     )
 
     overlay = create_detection_overlay(
-        [right_leg_border_points],
+        [left_leg_border_points],
         screen_width,
         screen_height
     )
@@ -311,13 +313,13 @@ def debug_right_leg_loop():
 
     try:
         while True:
-            frame = camera.grab(region=right_leg_capture_region)
+            frame = camera.grab(region=left_leg_capture_region)
             if frame is not None:
                 sample_frame = rectify_region(
                     frame,
-                    right_leg_capture_region,
-                    right_leg_sample_points,
-                    right_leg_sample_size
+                    left_leg_capture_region,
+                    left_leg_sample_points,
+                    left_leg_sample_size
                 )
                 percentages = get_colour_percentages(sample_frame)
                 detected_level = detect_damage_level(
@@ -336,7 +338,7 @@ def debug_right_leg_loop():
                     key=lambda item: item[1]
                 )
                 print(
-                    f"Right leg: {colour} | "
+                    f"Left leg: {colour} | "
                     f"selected={selected_colour} | "
                     f"largest raw category={candidate_level} "
                     f"({candidate_percentage:.2%}; "
@@ -346,7 +348,7 @@ def debug_right_leg_loop():
                     f"red={percentages['red']:.2%}, "
                     f"black={percentages['black']:.2%} | "
                     f"sample={sample_frame.shape[1]}x{sample_frame.shape[0]} "
-                    f"at {RIGHT_LEG_ANGLE_DEGREES} deg | "
+                    f"at {LEFT_LEG_ANGLE_DEGREES} deg | "
                     f"{get_colour_diagnostics(sample_frame)}"
                 )
 
@@ -401,4 +403,4 @@ def create_detection_overlay(regions, screen_width, screen_height):
 
 
 if __name__ == "__main__":
-    debug_right_leg_loop()
+    debug_left_leg_loop()
