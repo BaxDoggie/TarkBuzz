@@ -13,7 +13,8 @@ REFERENCE_HEIGHT = 1440
 HEAD_REGION = (80, 30, 118, 72)  # (left, top, right, bottom)
 TORSO_REGION = (75, 75, 111, 113)
 STOMACH_REGION = (70, 125, 116, 163)
-RIGHT_LEG_REGION = (102, 165, 122, 215)
+RIGHT_LEG_REGION = (115, 165, 135, 285)
+RIGHT_LEG_ANGLE_DEGREES = 8
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -52,6 +53,66 @@ def inset_region(region, inset):
         right - inset,
         bottom - inset
     )
+
+
+def rotated_region_points(region, angle_degrees):
+    left, top, right, bottom = region
+    center_x = (left + right) / 2
+    center_y = (top + bottom) / 2
+    half_width = (right - left) / 2
+    half_height = (bottom - top) / 2
+    angle = np.deg2rad(angle_degrees)
+    width_axis = (np.cos(angle), np.sin(angle))
+    height_axis = (-np.sin(angle), np.cos(angle))
+
+    return [
+        (
+            center_x - half_width * width_axis[0] - half_height * height_axis[0],
+            center_y - half_width * width_axis[1] - half_height * height_axis[1],
+        ),
+        (
+            center_x + half_width * width_axis[0] - half_height * height_axis[0],
+            center_y + half_width * width_axis[1] - half_height * height_axis[1],
+        ),
+        (
+            center_x + half_width * width_axis[0] + half_height * height_axis[0],
+            center_y + half_width * width_axis[1] + half_height * height_axis[1],
+        ),
+        (
+            center_x - half_width * width_axis[0] + half_height * height_axis[0],
+            center_y - half_width * width_axis[1] + half_height * height_axis[1],
+        ),
+    ]
+
+
+def points_bounds(points):
+    xs, ys = zip(*points)
+    return (
+        int(np.floor(min(xs))),
+        int(np.floor(min(ys))),
+        int(np.ceil(max(xs))),
+        int(np.ceil(max(ys))),
+    )
+
+
+def rectify_region(frame, capture_region, sample_points, output_size):
+    left, top, _, _ = capture_region
+    source_points = np.array(
+        [(x - left, y - top) for x, y in sample_points],
+        dtype=np.float32
+    )
+    output_width, output_height = output_size
+    destination_points = np.array(
+        [
+            (0, 0),
+            (output_width - 1, 0),
+            (output_width - 1, output_height - 1),
+            (0, output_height - 1),
+        ],
+        dtype=np.float32
+    )
+    transform = cv2.getPerspectiveTransform(source_points, destination_points)
+    return cv2.warpPerspective(frame, transform, output_size)
 
 
 def damage_colour(frame, lower_hsv, upper_hsv):
@@ -141,12 +202,26 @@ def get_colour_diagnostics(frame):
 def detect_damage_level(
     frame,
     minimum_percentage=MIN_COLOUR_PERCENTAGE,
-    torso=False
+    torso=False,
+    prefer_chromatic=False
 ):
     percentages = get_colour_percentages(frame, torso=torso)
 
     if not percentages:
         return None
+
+    if prefer_chromatic:
+        chromatic_candidates = {
+            0.0: percentages["green"],
+            0.25: percentages["yellow"],
+            0.5: percentages["red"],
+        }
+        chromatic_level, chromatic_percentage = max(
+            chromatic_candidates.items(),
+            key=lambda item: item[1]
+        )
+        if chromatic_percentage >= minimum_percentage:
+            return chromatic_level
 
     candidates = {
         0.0: percentages["green"],
@@ -198,13 +273,26 @@ def debug_right_leg_loop():
         screen_width,
         screen_height
     )
+    right_leg_border_points = rotated_region_points(
+        scaled_right_leg_region,
+        RIGHT_LEG_ANGLE_DEGREES
+    )
     right_leg_detection_region = inset_region(
         scaled_right_leg_region,
         DETECTION_INSET
     )
+    right_leg_sample_points = rotated_region_points(
+        right_leg_detection_region,
+        RIGHT_LEG_ANGLE_DEGREES
+    )
+    right_leg_capture_region = points_bounds(right_leg_sample_points)
+    right_leg_sample_size = (
+        right_leg_detection_region[2] - right_leg_detection_region[0],
+        right_leg_detection_region[3] - right_leg_detection_region[1],
+    )
 
     overlay = create_detection_overlay(
-        [right_leg_detection_region],
+        [right_leg_border_points],
         screen_width,
         screen_height
     )
@@ -223,29 +311,43 @@ def debug_right_leg_loop():
 
     try:
         while True:
-            frame = camera.grab(region=right_leg_detection_region)
+            frame = camera.grab(region=right_leg_capture_region)
             if frame is not None:
-                percentages = get_colour_percentages(frame)
-                detected_level = detect_damage_level(
+                sample_frame = rectify_region(
                     frame,
-                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE
+                    right_leg_capture_region,
+                    right_leg_sample_points,
+                    right_leg_sample_size
+                )
+                percentages = get_colour_percentages(sample_frame)
+                detected_level = detect_damage_level(
+                    sample_frame,
+                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE,
+                    prefer_chromatic=True
                 )
                 level = update_detection_state(state, detected_level)
                 colour = damage_colours.get(level, "unknown")
+                selected_colour = damage_colours.get(
+                    detected_level,
+                    "unknown"
+                )
                 candidate_level, candidate_percentage = max(
                     percentages.items(),
                     key=lambda item: item[1]
                 )
                 print(
                     f"Right leg: {colour} | "
-                    f"candidate={candidate_level} ({candidate_percentage:.2%}; "
+                    f"selected={selected_colour} | "
+                    f"largest raw category={candidate_level} "
+                    f"({candidate_percentage:.2%}; "
                     f"minimum={TORSO_MIN_COLOUR_PERCENTAGE:.2%}) | "
                     f"green={percentages['green']:.2%}, "
                     f"yellow={percentages['yellow']:.2%}, "
                     f"red={percentages['red']:.2%}, "
                     f"black={percentages['black']:.2%} | "
-                    f"sample={frame.shape[1]}x{frame.shape[0]} | "
-                    f"{get_colour_diagnostics(frame)}"
+                    f"sample={sample_frame.shape[1]}x{sample_frame.shape[0]} "
+                    f"at {RIGHT_LEG_ANGLE_DEGREES} deg | "
+                    f"{get_colour_diagnostics(sample_frame)}"
                 )
 
             overlay.update()
@@ -274,17 +376,13 @@ def create_detection_overlay(regions, screen_width, screen_height):
     )
     canvas.pack()
 
-    colors = ["orange"]
+    colors = ["cyan"]
 
-    for region, color in zip(regions, colors):
-        left, top, right, bottom = region
-
-        canvas.create_rectangle(
-            left,
-            top,
-            right,
-            bottom,
+    for points, color in zip(regions, colors):
+        canvas.create_polygon(
+            *[coordinate for point in points for coordinate in point],
             outline=color,
+            fill="",
             width=4
         )
 
