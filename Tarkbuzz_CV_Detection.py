@@ -21,6 +21,20 @@ RIGHT_ARM_REGION = (127, 75, 147, 168)
 RIGHT_ARM_ANGLE_DEGREES = -21
 LEFT_ARM_REGION = (46, 75, 62, 168)
 LEFT_ARM_ANGLE_DEGREES = 15
+INVENTORY_TAB_REGIONS = {
+    "OVERALL": (455, 5, 685, 58),
+    "GEAR": (685, 5, 950, 58),
+    "HEALTH": (950, 5, 1165, 58),
+    "SKILLS": (1165, 5, 1400, 58),
+    "MAP": (1400, 5, 1645, 58),
+    "TASKS": (1645, 5, 1900, 58),
+    "ACHIEVEMENTS": (1900, 5, 2105, 58),
+    "PRESTIGE": (2105, 5, 2310, 58),
+}
+INVENTORY_BACK_REGION = (2700, 0, 2980, 62)
+INVENTORY_MIN_TAB_WHITE_RATIO = 0.30
+INVENTORY_MIN_BACK_WHITE_RATIO = 0.40
+INVENTORY_CONFIRM_SAMPLES = 3
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -59,6 +73,34 @@ def inset_region(region, inset):
         right - inset,
         bottom - inset
     )
+
+
+def region_bounds(regions):
+    return (
+        min(region[0] for region in regions),
+        min(region[1] for region in regions),
+        max(region[2] for region in regions),
+        max(region[3] for region in regions),
+    )
+
+
+def bright_neutral_ratio(frame, capture_region, sample_region, inset=0):
+    left, top, right, bottom = inset_region(sample_region, inset)
+    capture_left, capture_top, _, _ = capture_region
+    sample = frame[
+        top - capture_top:bottom - capture_top,
+        left - capture_left:right - capture_left
+    ]
+    if sample.size == 0:
+        return 0.0
+
+    darkest_channel = sample.min(axis=2)
+    brightest_channel = sample.max(axis=2)
+    bright_neutral = (
+        (darkest_channel > 170) &
+        ((brightest_channel - darkest_channel) < 70)
+    )
+    return cv2.countNonZero(bright_neutral.astype(np.uint8)) / bright_neutral.size
 
 
 def rotated_region_points(region, angle_degrees):
@@ -270,6 +312,97 @@ def update_detection_state(state, detected_level):
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
+def debug_inventory_loop():
+    print("Starting inventory debug. Press Ctrl+C to stop.")
+
+    screen_width, screen_height = get_screen_size()
+    scaled_tabs = {
+        name: scale_region(region, screen_width, screen_height)
+        for name, region in INVENTORY_TAB_REGIONS.items()
+    }
+    scaled_back_region = scale_region(
+        INVENTORY_BACK_REGION,
+        screen_width,
+        screen_height
+    )
+    tab_bar_region = region_bounds(list(scaled_tabs.values()))
+    capture_region = region_bounds(
+        [tab_bar_region, scaled_back_region]
+    )
+    overlay = create_detection_overlay(
+        [
+            rect_region_points(tab_bar_region),
+            rect_region_points(scaled_back_region),
+        ],
+        screen_width,
+        screen_height
+    )
+    inventory_state = None
+    pending_state = None
+    pending_samples = 0
+
+    try:
+        while True:
+            frame = camera.grab(region=capture_region)
+            if frame is not None:
+                tab_scores = {
+                    name: bright_neutral_ratio(
+                        frame,
+                        capture_region,
+                        region,
+                        inset=DETECTION_INSET
+                    )
+                    for name, region in scaled_tabs.items()
+                }
+                selected_tab, selected_tab_ratio = max(
+                    tab_scores.items(),
+                    key=lambda item: item[1]
+                )
+                back_ratio = bright_neutral_ratio(
+                    frame,
+                    capture_region,
+                    scaled_back_region,
+                    inset=DETECTION_INSET
+                )
+                detected_inventory = (
+                    selected_tab_ratio >= INVENTORY_MIN_TAB_WHITE_RATIO
+                    and back_ratio >= INVENTORY_MIN_BACK_WHITE_RATIO
+                )
+
+                if detected_inventory == pending_state:
+                    pending_samples += 1
+                else:
+                    pending_state = detected_inventory
+                    pending_samples = 1
+
+                if pending_samples >= INVENTORY_CONFIRM_SAMPLES:
+                    inventory_state = detected_inventory
+
+                status = (
+                    "CHECKING"
+                    if inventory_state is None
+                    else "IN INVENTORY"
+                    if inventory_state
+                    else "NOT IN INVENTORY"
+                )
+                print(
+                    f"{status} | candidate_tab={selected_tab} "
+                    f"({selected_tab_ratio:.1%}; "
+                    f"min={INVENTORY_MIN_TAB_WHITE_RATIO:.0%}) | "
+                    f"back={back_ratio:.1%} "
+                    f"(min={INVENTORY_MIN_BACK_WHITE_RATIO:.0%})"
+                )
+
+            overlay.update()
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+        print("Stopped")
+
+    finally:
+        overlay.destroy()
+
+
 def debug_arm_loop(name, region, angle_degrees):
     print("Starting overlay debug. Press Ctrl+C to stop.")
 
@@ -406,7 +539,7 @@ def create_detection_overlay(regions, screen_width, screen_height):
     )
     canvas.pack()
 
-    colors = ["cyan"]
+    colors = ["cyan"] * len(regions)
 
     for points, color in zip(regions, colors):
         canvas.create_polygon(
@@ -430,5 +563,15 @@ def create_detection_overlay(regions, screen_width, screen_height):
     return root
 
 
+def rect_region_points(region):
+    left, top, right, bottom = region
+    return [
+        (left, top),
+        (right, top),
+        (right, bottom),
+        (left, bottom),
+    ]
+
+
 if __name__ == "__main__":
-    debug_left_arm_loop()
+    debug_inventory_loop()
