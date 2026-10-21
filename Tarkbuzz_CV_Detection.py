@@ -35,6 +35,17 @@ INVENTORY_MIN_TAB_WHITE_RATIO = 0.30
 INVENTORY_MIN_TAB_CONTRAST = 0.20
 INVENTORY_MIN_TAB_BAR_DARK_RATIO = 0.15
 INVENTORY_CONFIRM_SAMPLES = 3
+KIA_BADGE_REGION = (1400, 820, 1820, 950)
+KIA_RED_MIN_SATURATION = 200
+KIA_RED_MIN_VALUE = 140
+KIA_MIN_RED_RATIO = 0.25
+KIA_MIN_BADGE_WIDTH_RATIO = 0.60
+KIA_MIN_BADGE_HEIGHT_RATIO = 0.35
+KIA_BADGE_ASPECT_RANGE = (3.7, 5.2)
+KIA_MIN_BADGE_FILL_RATIO = 0.85
+KIA_MIN_BADGE_DETAIL_RATIO = 0.005
+KIA_MAX_BADGE_CENTER_OFFSET = 0.15
+KIA_CONFIRM_SAMPLES = 3
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
 TORSO_MIN_COLOUR_PERCENTAGE = 0.003
@@ -116,6 +127,77 @@ def dark_pixel_ratio(frame, capture_region, sample_region, inset=0):
     grayscale = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY)
     dark_pixels = grayscale < 100
     return cv2.countNonZero(dark_pixels.astype(np.uint8)) / dark_pixels.size
+
+
+def detect_kia_badge(frame):
+    empty_metrics = {
+        "red_ratio": 0.0,
+        "aspect": 0.0,
+        "fill": 0.0,
+        "detail": 0.0,
+        "center_offset": 1.0,
+        "width_ratio": 0.0,
+        "height_ratio": 0.0,
+    }
+    if frame is None or frame.size == 0:
+        return False, empty_metrics
+
+    hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
+    red_mask = (
+        cv2.inRange(
+            hsv,
+            np.array([0, KIA_RED_MIN_SATURATION, KIA_RED_MIN_VALUE]),
+            np.array([10, 255, 255])
+        ) |
+        cv2.inRange(
+            hsv,
+            np.array([170, KIA_RED_MIN_SATURATION, KIA_RED_MIN_VALUE]),
+            np.array([180, 255, 255])
+        )
+    )
+    red_ratio = cv2.countNonZero(red_mask) / red_mask.size
+    component_count, _, stats, _ = cv2.connectedComponentsWithStats(
+        red_mask,
+        connectivity=8
+    )
+    if component_count <= 1:
+        empty_metrics["red_ratio"] = red_ratio
+        return False, empty_metrics
+
+    component_index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
+    x, y, width, height, area = stats[component_index]
+    if width == 0 or height == 0:
+        empty_metrics["red_ratio"] = red_ratio
+        return False, empty_metrics
+
+    fill_ratio = area / (width * height)
+    detail_ratio = 1.0 - fill_ratio
+    aspect_ratio = width / height
+    width_ratio = width / frame.shape[1]
+    height_ratio = height / frame.shape[0]
+    center_offset = max(
+        abs((x + width / 2) - frame.shape[1] / 2) / frame.shape[1],
+        abs((y + height / 2) - frame.shape[0] / 2) / frame.shape[0],
+    )
+    metrics = {
+        "red_ratio": red_ratio,
+        "aspect": aspect_ratio,
+        "fill": fill_ratio,
+        "detail": detail_ratio,
+        "center_offset": center_offset,
+        "width_ratio": width_ratio,
+        "height_ratio": height_ratio,
+    }
+    detected = (
+        red_ratio >= KIA_MIN_RED_RATIO
+        and width_ratio >= KIA_MIN_BADGE_WIDTH_RATIO
+        and height_ratio >= KIA_MIN_BADGE_HEIGHT_RATIO
+        and KIA_BADGE_ASPECT_RANGE[0] <= aspect_ratio <= KIA_BADGE_ASPECT_RANGE[1]
+        and fill_ratio >= KIA_MIN_BADGE_FILL_RATIO
+        and detail_ratio >= KIA_MIN_BADGE_DETAIL_RATIO
+        and center_offset <= KIA_MAX_BADGE_CENTER_OFFSET
+    )
+    return detected, metrics
 
 
 def get_screen_region_pixels(frame, capture_region, sample_region, inset):
@@ -335,6 +417,71 @@ def update_detection_state(state, detected_level):
 
 
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
+
+def debug_kia_loop():
+    print("Starting Killed in Action debug. Press Ctrl+C to stop.")
+
+    screen_width, screen_height = get_screen_size()
+    scaled_badge_region = scale_region(
+        KIA_BADGE_REGION,
+        screen_width,
+        screen_height
+    )
+    detection_region = inset_region(
+        scaled_badge_region,
+        DETECTION_INSET
+    )
+    overlay = create_detection_overlay(
+        [rect_region_points(scaled_badge_region)],
+        screen_width,
+        screen_height
+    )
+    confirmed_kia = None
+    pending_kia = None
+    pending_samples = 0
+
+    try:
+        while True:
+            frame = camera.grab(region=detection_region)
+            if frame is not None:
+                detected_kia, metrics = detect_kia_badge(frame)
+                if detected_kia == pending_kia:
+                    pending_samples += 1
+                else:
+                    pending_kia = detected_kia
+                    pending_samples = 1
+
+                if pending_samples >= KIA_CONFIRM_SAMPLES:
+                    confirmed_kia = detected_kia
+
+                status = (
+                    "CHECKING"
+                    if confirmed_kia is None
+                    else "KILLED IN ACTION"
+                    if confirmed_kia
+                    else "NOT KIA"
+                )
+                print(
+                    f"{status} | candidate={'KIA' if detected_kia else 'no KIA'} | "
+                    f"red={metrics['red_ratio']:.1%} "
+                    f"(min={KIA_MIN_RED_RATIO:.0%}) | "
+                    f"badge={metrics['aspect']:.2f}:1 "
+                    f"(range={KIA_BADGE_ASPECT_RANGE[0]:.1f}-"
+                    f"{KIA_BADGE_ASPECT_RANGE[1]:.1f}) | "
+                    f"fill={metrics['fill']:.1%} | "
+                    f"detail={metrics['detail']:.1%} | "
+                    f"center_offset={metrics['center_offset']:.1%}"
+                )
+
+            overlay.update()
+            time.sleep(0.5)
+
+    except KeyboardInterrupt:
+        print("Stopped")
+
+    finally:
+        overlay.destroy()
+
 
 def debug_inventory_loop():
     print("Starting inventory debug. Press Ctrl+C to stop.")
@@ -595,4 +742,4 @@ def rect_region_points(region):
 
 
 if __name__ == "__main__":
-    debug_inventory_loop()
+    debug_kia_loop()
