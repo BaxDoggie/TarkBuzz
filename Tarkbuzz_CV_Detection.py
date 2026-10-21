@@ -31,9 +31,9 @@ INVENTORY_TAB_REGIONS = {
     "ACHIEVEMENTS": (1900, 5, 2105, 58),
     "PRESTIGE": (2105, 5, 2310, 58),
 }
-INVENTORY_BACK_REGION = (2700, 0, 2980, 62)
 INVENTORY_MIN_TAB_WHITE_RATIO = 0.30
-INVENTORY_MIN_BACK_WHITE_RATIO = 0.40
+INVENTORY_MIN_TAB_CONTRAST = 0.20
+INVENTORY_MIN_TAB_BAR_DARK_RATIO = 0.15
 INVENTORY_CONFIRM_SAMPLES = 3
 DETECTION_INSET = 4
 MIN_COLOUR_PERCENTAGE = 0.02
@@ -85,12 +85,12 @@ def region_bounds(regions):
 
 
 def bright_neutral_ratio(frame, capture_region, sample_region, inset=0):
-    left, top, right, bottom = inset_region(sample_region, inset)
-    capture_left, capture_top, _, _ = capture_region
-    sample = frame[
-        top - capture_top:bottom - capture_top,
-        left - capture_left:right - capture_left
-    ]
+    sample = get_screen_region_pixels(
+        frame,
+        capture_region,
+        sample_region,
+        inset
+    )
     if sample.size == 0:
         return 0.0
 
@@ -101,6 +101,30 @@ def bright_neutral_ratio(frame, capture_region, sample_region, inset=0):
         ((brightest_channel - darkest_channel) < 70)
     )
     return cv2.countNonZero(bright_neutral.astype(np.uint8)) / bright_neutral.size
+
+
+def dark_pixel_ratio(frame, capture_region, sample_region, inset=0):
+    sample = get_screen_region_pixels(
+        frame,
+        capture_region,
+        sample_region,
+        inset
+    )
+    if sample.size == 0:
+        return 0.0
+
+    grayscale = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY)
+    dark_pixels = grayscale < 100
+    return cv2.countNonZero(dark_pixels.astype(np.uint8)) / dark_pixels.size
+
+
+def get_screen_region_pixels(frame, capture_region, sample_region, inset):
+    left, top, right, bottom = inset_region(sample_region, inset)
+    capture_left, capture_top, _, _ = capture_region
+    return frame[
+        top - capture_top:bottom - capture_top,
+        left - capture_left:right - capture_left
+    ]
 
 
 def rotated_region_points(region, angle_degrees):
@@ -320,20 +344,10 @@ def debug_inventory_loop():
         name: scale_region(region, screen_width, screen_height)
         for name, region in INVENTORY_TAB_REGIONS.items()
     }
-    scaled_back_region = scale_region(
-        INVENTORY_BACK_REGION,
-        screen_width,
-        screen_height
-    )
     tab_bar_region = region_bounds(list(scaled_tabs.values()))
-    capture_region = region_bounds(
-        [tab_bar_region, scaled_back_region]
-    )
+    capture_region = tab_bar_region
     overlay = create_detection_overlay(
-        [
-            rect_region_points(tab_bar_region),
-            rect_region_points(scaled_back_region),
-        ],
+        [rect_region_points(region) for region in scaled_tabs.values()],
         screen_width,
         screen_height
     )
@@ -354,19 +368,24 @@ def debug_inventory_loop():
                     )
                     for name, region in scaled_tabs.items()
                 }
-                selected_tab, selected_tab_ratio = max(
+                ranked_tabs = sorted(
                     tab_scores.items(),
-                    key=lambda item: item[1]
+                    key=lambda item: item[1],
+                    reverse=True
                 )
-                back_ratio = bright_neutral_ratio(
+                selected_tab, selected_tab_ratio = ranked_tabs[0]
+                second_tab_ratio = ranked_tabs[1][1]
+                tab_contrast = selected_tab_ratio - second_tab_ratio
+                tab_bar_dark_ratio = dark_pixel_ratio(
                     frame,
                     capture_region,
-                    scaled_back_region,
+                    tab_bar_region,
                     inset=DETECTION_INSET
                 )
                 detected_inventory = (
                     selected_tab_ratio >= INVENTORY_MIN_TAB_WHITE_RATIO
-                    and back_ratio >= INVENTORY_MIN_BACK_WHITE_RATIO
+                    and tab_contrast >= INVENTORY_MIN_TAB_CONTRAST
+                    and tab_bar_dark_ratio >= INVENTORY_MIN_TAB_BAR_DARK_RATIO
                 )
 
                 if detected_inventory == pending_state:
@@ -389,8 +408,10 @@ def debug_inventory_loop():
                     f"{status} | candidate_tab={selected_tab} "
                     f"({selected_tab_ratio:.1%}; "
                     f"min={INVENTORY_MIN_TAB_WHITE_RATIO:.0%}) | "
-                    f"back={back_ratio:.1%} "
-                    f"(min={INVENTORY_MIN_BACK_WHITE_RATIO:.0%})"
+                    f"tab_gap={tab_contrast:.1%} "
+                    f"(min={INVENTORY_MIN_TAB_CONTRAST:.0%}) | "
+                    f"dark_strip={tab_bar_dark_ratio:.1%} "
+                    f"(min={INVENTORY_MIN_TAB_BAR_DARK_RATIO:.0%})"
                 )
 
             overlay.update()
