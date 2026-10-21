@@ -21,24 +21,4 @@ Please refer to the Interface Central documentation before setting this up and u
 
 - Health Condition must be set to "Always Shown"
 - Health Condition should be set to "polychrome"
-- This project is intended for Windows use
-
-## Current status
-
-This is still an early prototype. The head detection flow is being tested first, and the project is being expanded step by step.
-
-## How to use it
-
-1. Set up your Buttplug-compatible device
-2. Configure the game UI as required above
-3. Run the detection script on Windows
-4. Confirm the detection area is aligned with the in-game head indicator
-5. Tune the detection values as needed
-
-## Important note
-
-This is a learning and testing project. The detection system is still being refined, and the current focus is proving that the visual detection approach works reliably before expanding it further.
-
-## Notes
-
-TarkBuzz is designed to stay simple, visual, and modular. The goal is to improve detection gradually while keeping the project easy to understand and extend.
+- This project is intended for Windows 
