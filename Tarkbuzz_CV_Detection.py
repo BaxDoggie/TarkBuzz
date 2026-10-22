@@ -39,10 +39,18 @@ KIA_BADGE_REGION = (1440, 845, 1775, 930)
 KIA_RED_MIN_SATURATION = 200
 KIA_RED_MIN_VALUE = 140
 KIA_MIN_RED_RATIO = 0.25
+SURVIVED_GREEN_HUE_RANGE = (35, 85)
+SURVIVED_GREEN_MIN_SATURATION = 100
+SURVIVED_GREEN_MIN_VALUE = 100
+SURVIVED_MIN_GREEN_RATIO = 0.25
+RUN_THROUGH_WHITE_MAX_SATURATION = 70
+RUN_THROUGH_WHITE_MIN_VALUE = 200
+RUN_THROUGH_MIN_WHITE_RATIO = 0.25
 KIA_MIN_BADGE_WIDTH_RATIO = 0.60
 KIA_MIN_BADGE_HEIGHT_RATIO = 0.35
 KIA_BADGE_ASPECT_RANGE = (3.7, 5.2)
 KIA_MIN_BADGE_FILL_RATIO = 0.85
+RUN_THROUGH_MIN_BADGE_FILL_RATIO = 0.65
 KIA_MIN_BADGE_DETAIL_RATIO = 0.005
 KIA_MAX_BADGE_CENTER_OFFSET = 0.15
 KIA_CONFIRM_SAMPLES = 3
@@ -129,9 +137,17 @@ def dark_pixel_ratio(frame, capture_region, sample_region, inset=0):
     return cv2.countNonZero(dark_pixels.astype(np.uint8)) / dark_pixels.size
 
 
-def detect_kia_badge(frame):
+def detect_colored_badge(
+    frame,
+    hue_ranges,
+    minimum_saturation,
+    minimum_value,
+    minimum_color_ratio,
+    maximum_saturation=255,
+    minimum_fill_ratio=KIA_MIN_BADGE_FILL_RATIO
+):
     empty_metrics = {
-        "red_ratio": 0.0,
+        "color_ratio": 0.0,
         "aspect": 0.0,
         "fill": 0.0,
         "detail": 0.0,
@@ -143,31 +159,26 @@ def detect_kia_badge(frame):
         return False, empty_metrics
 
     hsv = cv2.cvtColor(frame, cv2.COLOR_BGR2HSV)
-    red_mask = (
-        cv2.inRange(
+    color_mask = np.zeros(hsv.shape[:2], dtype=np.uint8)
+    for hue_min, hue_max in hue_ranges:
+        color_mask |= cv2.inRange(
             hsv,
-            np.array([0, KIA_RED_MIN_SATURATION, KIA_RED_MIN_VALUE]),
-            np.array([10, 255, 255])
-        ) |
-        cv2.inRange(
-            hsv,
-            np.array([170, KIA_RED_MIN_SATURATION, KIA_RED_MIN_VALUE]),
-            np.array([180, 255, 255])
+            np.array([hue_min, minimum_saturation, minimum_value]),
+            np.array([hue_max, maximum_saturation, 255])
         )
-    )
-    red_ratio = cv2.countNonZero(red_mask) / red_mask.size
+    color_ratio = cv2.countNonZero(color_mask) / color_mask.size
     component_count, _, stats, _ = cv2.connectedComponentsWithStats(
-        red_mask,
+        color_mask,
         connectivity=8
     )
     if component_count <= 1:
-        empty_metrics["red_ratio"] = red_ratio
+        empty_metrics["color_ratio"] = color_ratio
         return False, empty_metrics
 
     component_index = 1 + int(np.argmax(stats[1:, cv2.CC_STAT_AREA]))
     x, y, width, height, area = stats[component_index]
     if width == 0 or height == 0:
-        empty_metrics["red_ratio"] = red_ratio
+        empty_metrics["color_ratio"] = color_ratio
         return False, empty_metrics
 
     fill_ratio = area / (width * height)
@@ -180,7 +191,7 @@ def detect_kia_badge(frame):
         abs((y + height / 2) - frame.shape[0] / 2) / frame.shape[0],
     )
     metrics = {
-        "red_ratio": red_ratio,
+        "color_ratio": color_ratio,
         "aspect": aspect_ratio,
         "fill": fill_ratio,
         "detail": detail_ratio,
@@ -189,14 +200,52 @@ def detect_kia_badge(frame):
         "height_ratio": height_ratio,
     }
     detected = (
-        red_ratio >= KIA_MIN_RED_RATIO
+        color_ratio >= minimum_color_ratio
         and width_ratio >= KIA_MIN_BADGE_WIDTH_RATIO
         and height_ratio >= KIA_MIN_BADGE_HEIGHT_RATIO
         and KIA_BADGE_ASPECT_RANGE[0] <= aspect_ratio <= KIA_BADGE_ASPECT_RANGE[1]
-        and fill_ratio >= KIA_MIN_BADGE_FILL_RATIO
+        and fill_ratio >= minimum_fill_ratio
         and detail_ratio >= KIA_MIN_BADGE_DETAIL_RATIO
         and center_offset <= KIA_MAX_BADGE_CENTER_OFFSET
     )
+    return detected, metrics
+
+
+def detect_kia_badge(frame):
+    detected, metrics = detect_colored_badge(
+        frame,
+        ((0, 10), (170, 180)),
+        KIA_RED_MIN_SATURATION,
+        KIA_RED_MIN_VALUE,
+        KIA_MIN_RED_RATIO
+    )
+    metrics["red_ratio"] = metrics.pop("color_ratio")
+    return detected, metrics
+
+
+def detect_survived_badge(frame):
+    detected, metrics = detect_colored_badge(
+        frame,
+        (SURVIVED_GREEN_HUE_RANGE,),
+        SURVIVED_GREEN_MIN_SATURATION,
+        SURVIVED_GREEN_MIN_VALUE,
+        SURVIVED_MIN_GREEN_RATIO
+    )
+    metrics["green_ratio"] = metrics.pop("color_ratio")
+    return detected, metrics
+
+
+def detect_run_through_badge(frame):
+    detected, metrics = detect_colored_badge(
+        frame,
+        ((0, 180),),
+        0,
+        RUN_THROUGH_WHITE_MIN_VALUE,
+        RUN_THROUGH_MIN_WHITE_RATIO,
+        maximum_saturation=RUN_THROUGH_WHITE_MAX_SATURATION,
+        minimum_fill_ratio=RUN_THROUGH_MIN_BADGE_FILL_RATIO
+    )
+    metrics["white_ratio"] = metrics.pop("color_ratio")
     return detected, metrics
 
 
@@ -419,7 +468,7 @@ def update_detection_state(state, detected_level):
 DEBUG_SCREEN_REGION = (0, 0, 3440, 1440)
 
 def debug_kia_loop():
-    print("Starting Killed in Action debug. Press Ctrl+C to stop.")
+    print("Starting raid outcome debug. Press Ctrl+C to stop.")
 
     screen_width, screen_height = get_screen_size()
     scaled_badge_region = scale_region(
@@ -436,41 +485,72 @@ def debug_kia_loop():
         screen_width,
         screen_height
     )
-    confirmed_kia = None
-    pending_kia = None
+    confirmed_outcome = None
+    pending_outcome = None
     pending_samples = 0
 
     try:
         while True:
             frame = camera.grab(region=detection_region)
             if frame is not None:
-                detected_kia, metrics = detect_kia_badge(frame)
-                if detected_kia == pending_kia:
+                detected_kia, kia_metrics = detect_kia_badge(frame)
+                detected_survived, survived_metrics = detect_survived_badge(
+                    frame
+                )
+                detected_run_through, run_through_metrics = (
+                    detect_run_through_badge(frame)
+                )
+                detected_outcomes = [
+                    outcome
+                    for outcome, detected in (
+                        ("kia", detected_kia),
+                        ("survived", detected_survived),
+                        ("run_through", detected_run_through),
+                    )
+                    if detected
+                ]
+                if len(detected_outcomes) > 1:
+                    candidate_outcome = "ambiguous"
+                elif detected_outcomes:
+                    candidate_outcome = detected_outcomes[0]
+                else:
+                    candidate_outcome = "none"
+
+                if candidate_outcome == pending_outcome:
                     pending_samples += 1
                 else:
-                    pending_kia = detected_kia
+                    pending_outcome = candidate_outcome
                     pending_samples = 1
 
                 if pending_samples >= KIA_CONFIRM_SAMPLES:
-                    confirmed_kia = detected_kia
+                    confirmed_outcome = candidate_outcome
 
-                status = (
+                status_labels = {
+                    "kia": "KILLED IN ACTION",
+                    "survived": "RAID SURVIVED",
+                    "run_through": "RUN THROUGH",
+                    "ambiguous": "AMBIGUOUS BADGE",
+                    "none": "NO OUTCOME BADGE",
+                }
+                status = status_labels.get(
+                    confirmed_outcome,
                     "CHECKING"
-                    if confirmed_kia is None
-                    else "KILLED IN ACTION"
-                    if confirmed_kia
-                    else "NOT KIA"
                 )
                 print(
-                    f"{status} | candidate={'KIA' if detected_kia else 'no KIA'} | "
-                    f"red={metrics['red_ratio']:.1%} "
+                    f"{status} | candidate={candidate_outcome} | "
+                    f"red={kia_metrics['red_ratio']:.1%} "
                     f"(min={KIA_MIN_RED_RATIO:.0%}) | "
-                    f"badge={metrics['aspect']:.2f}:1 "
-                    f"(range={KIA_BADGE_ASPECT_RANGE[0]:.1f}-"
-                    f"{KIA_BADGE_ASPECT_RANGE[1]:.1f}) | "
-                    f"fill={metrics['fill']:.1%} | "
-                    f"detail={metrics['detail']:.1%} | "
-                    f"center_offset={metrics['center_offset']:.1%}"
+                    f"green={survived_metrics['green_ratio']:.1%} "
+                    f"(min={SURVIVED_MIN_GREEN_RATIO:.0%}) | "
+                    f"white={run_through_metrics['white_ratio']:.1%} "
+                    f"(min={RUN_THROUGH_MIN_WHITE_RATIO:.0%}) | "
+                    f"shapes red/green/white="
+                    f"{kia_metrics['aspect']:.2f}/"
+                    f"{survived_metrics['aspect']:.2f}/"
+                    f"{run_through_metrics['aspect']:.2f}:1 | "
+                    f"fills={kia_metrics['fill']:.1%}/"
+                    f"{survived_metrics['fill']:.1%}/"
+                    f"{run_through_metrics['fill']:.1%}"
                 )
 
             overlay.update()
