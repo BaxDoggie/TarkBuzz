@@ -66,6 +66,7 @@ class BuzzGUI:
         self.raid_end_outcome = None
         self.raid_health_probe_at = 0.0
         self.raid_vibration_until = None
+        self.raid_vibration_enabled = {}
         
         # Create a persistent event loop for async operations
         self.loop = asyncio.new_event_loop()
@@ -138,15 +139,42 @@ class BuzzGUI:
         )
         dynamic_buzz_check.grid(row=len(limb_keys), column=0, sticky="w", pady=(8, 0))
 
+        outcome_frame = ttk.LabelFrame(
+            root,
+            text="Raid Outcome Vibration (60 seconds at maximum)",
+            padding=10,
+        )
+        outcome_frame.grid(
+            row=3,
+            column=0,
+            columnspan=2,
+            sticky="ew",
+            padx=10,
+            pady=8,
+        )
+        outcome_options = (
+            ("kia", "Death / Killed in Action", False),
+            ("survived", "Survived", True),
+            ("run_through", "Run Through", False),
+        )
+        for column, (outcome, label, enabled_by_default) in enumerate(outcome_options):
+            enabled = tk.BooleanVar(value=enabled_by_default)
+            ttk.Checkbutton(
+                outcome_frame,
+                text=label,
+                variable=enabled,
+            ).grid(row=0, column=column, sticky="w", padx=8)
+            self.raid_vibration_enabled[outcome] = enabled
+
         # Buttons for save and reset
         button_frame = ttk.Frame(root, padding=10)
-        button_frame.grid(row=3, column=0, sticky="ew")
+        button_frame.grid(row=4, column=0, sticky="ew")
         ttk.Button(button_frame, text="Save Levels", command=self.save_levels).pack(side=tk.LEFT, padx=6)
         ttk.Button(button_frame, text="Reset to Default", command=self.reset_to_default).pack(side=tk.LEFT, padx=6)
 
         # Action buttons
         actions = ttk.Frame(root, padding=10)
-        actions.grid(row=4, column=0, sticky="ew")
+        actions.grid(row=5, column=0, sticky="ew")
         ttk.Button(actions, text="Vibrate Now (Head)", command=self.vibrate_head).grid(row=0, column=0, padx=6)
         ttk.Button(actions, text="Quit", command=self.on_quit).grid(row=0, column=1)
         self.raid_status_var = tk.StringVar(value="Raid status: monitoring")
@@ -274,6 +302,14 @@ class BuzzGUI:
                         self.raid_health_probe_at = now + 10.0
                         if bt.is_full_body_green():
                             print("Gameplay resumed: all health regions are green")
+                            if self.raid_vibration_until is not None:
+                                for device in self.devices:
+                                    await device.run_output(
+                                        DeviceOutputCommand(
+                                            OutputType.VIBRATE,
+                                            0.0,
+                                        )
+                                    )
                             self.raid_end_outcome = None
                             self.raid_vibration_until = None
                             bt.reset_raid_outcome_detection()
@@ -315,7 +351,7 @@ class BuzzGUI:
                 if outcome in ("kia", "survived", "run_through"):
                     self.raid_end_outcome = outcome
                     self.raid_health_probe_at = now + 10.0
-                    if outcome == "survived":
+                    if self.raid_vibration_enabled[outcome].get():
                         self.raid_vibration_until = now + 60.0
                         for device in self.devices:
                             await device.run_output(
@@ -324,8 +360,14 @@ class BuzzGUI:
                                     1.0,
                                 )
                             )
+                        outcome_label = {
+                            "kia": "death",
+                            "survived": "survival",
+                            "run_through": "run through",
+                        }[outcome]
                         status = (
-                            "Raid status: survived (maximum vibration for 60 seconds)"
+                            f"Raid status: {outcome_label} "
+                            "(maximum vibration for up to 60 seconds)"
                         )
                     else:
                         self.raid_vibration_until = None
@@ -336,10 +378,14 @@ class BuzzGUI:
                                     0.0,
                                 )
                             )
+                        outcome_label = {
+                            "kia": "killed in action",
+                            "survived": "survived",
+                            "run_through": "run through",
+                        }[outcome]
                         status = (
-                            "Raid status: killed in action; waiting for gameplay"
-                            if outcome == "kia"
-                            else "Raid status: run through; waiting for gameplay"
+                            f"Raid status: {outcome_label}; vibration disabled, "
+                            "waiting for gameplay"
                         )
                     print(f"Confirmed raid outcome: {outcome}")
                     self.root.after(
