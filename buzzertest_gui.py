@@ -4,6 +4,7 @@ import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
 import os
+import time
 
 import Buzzertest as bt
 
@@ -62,6 +63,9 @@ class BuzzGUI:
         self.devices = []
         self.polling = False
         self.monitoring = False
+        self.raid_end_outcome = None
+        self.raid_health_probe_at = 0.0
+        self.raid_vibration_until = None
         
         # Create a persistent event loop for async operations
         self.loop = asyncio.new_event_loop()
@@ -145,6 +149,15 @@ class BuzzGUI:
         actions.grid(row=4, column=0, sticky="ew")
         ttk.Button(actions, text="Vibrate Now (Head)", command=self.vibrate_head).grid(row=0, column=0, padx=6)
         ttk.Button(actions, text="Quit", command=self.on_quit).grid(row=0, column=1)
+        self.raid_status_var = tk.StringVar(value="Raid status: monitoring")
+        ttk.Label(actions, textvariable=self.raid_status_var).grid(
+            row=1,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            padx=6,
+            pady=(8, 0),
+        )
 
     def run_event_loop(self):
         """Run the asyncio event loop in a background thread"""
@@ -254,6 +267,87 @@ class BuzzGUI:
         while self.monitoring:
             try:
                 from buttplug import DeviceOutputCommand, OutputType
+
+                now = time.monotonic()
+                if self.raid_end_outcome is not None:
+                    if now >= self.raid_health_probe_at:
+                        self.raid_health_probe_at = now + 10.0
+                        if bt.is_full_body_green():
+                            print("Gameplay resumed: all health regions are green")
+                            self.raid_end_outcome = None
+                            self.raid_vibration_until = None
+                            bt.reset_raid_outcome_detection()
+                            self.root.after(
+                                0,
+                                lambda: self.raid_status_var.set(
+                                    "Raid status: monitoring"
+                                ),
+                            )
+                        else:
+                            print(
+                                "Raid-end screen remains active; "
+                                "checking health again in 10 seconds"
+                            )
+
+                    if self.raid_end_outcome is not None:
+                        if (
+                            self.raid_vibration_until is not None
+                            and now >= self.raid_vibration_until
+                        ):
+                            for device in self.devices:
+                                await device.run_output(
+                                    DeviceOutputCommand(
+                                        OutputType.VIBRATE,
+                                        0.0,
+                                    )
+                                )
+                            self.raid_vibration_until = None
+                            self.root.after(
+                                0,
+                                lambda: self.raid_status_var.set(
+                                    "Raid status: survived (60-second vibration complete); waiting for gameplay"
+                                ),
+                            )
+                        await asyncio.sleep(0.1)
+                        continue
+
+                outcome = bt.get_raid_outcome()
+                if outcome in ("kia", "survived", "run_through"):
+                    self.raid_end_outcome = outcome
+                    self.raid_health_probe_at = now + 10.0
+                    if outcome == "survived":
+                        self.raid_vibration_until = now + 60.0
+                        for device in self.devices:
+                            await device.run_output(
+                                DeviceOutputCommand(
+                                    OutputType.VIBRATE,
+                                    1.0,
+                                )
+                            )
+                        status = (
+                            "Raid status: survived (maximum vibration for 60 seconds)"
+                        )
+                    else:
+                        self.raid_vibration_until = None
+                        for device in self.devices:
+                            await device.run_output(
+                                DeviceOutputCommand(
+                                    OutputType.VIBRATE,
+                                    0.0,
+                                )
+                            )
+                        status = (
+                            "Raid status: killed in action; waiting for gameplay"
+                            if outcome == "kia"
+                            else "Raid status: run through; waiting for gameplay"
+                        )
+                    print(f"Confirmed raid outcome: {outcome}")
+                    self.root.after(
+                        0,
+                        lambda status=status: self.raid_status_var.set(status),
+                    )
+                    await asyncio.sleep(0.1)
+                    continue
 
                 # Get colors
                 colors = bt.get_all_limb_colors()
