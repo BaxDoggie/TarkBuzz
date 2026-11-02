@@ -21,6 +21,20 @@ DEFAULT_LEVELS = {
 # Database helper functions
 DB_PATH = os.path.expanduser("~/.buzz_levels.db")
 
+DARK_THEME = {
+    "window": "#15181e",
+    "panel": "#1e232b",
+    "input": "#11151b",
+    "text": "#e7eaf0",
+    "muted": "#aab3c2",
+    "accent": "#5b9cff",
+    "button": "#2a313c",
+    "button_active": "#374252",
+    "border": "#343c48",
+    "selection": "#365a8a",
+}
+
+
 def init_db():
     """Initialize database if it doesn't exist"""
     conn = sqlite3.connect(DB_PATH)
@@ -57,6 +71,7 @@ class TarkBuzzGUI:
     def __init__(self, root):
         self.root = root
         root.title("TarkBuzz UI")
+        self.configure_dark_theme()
 
         # Buttplug client and device list
         self.client = None
@@ -84,6 +99,15 @@ class TarkBuzzGUI:
 
         ttk.Label(top, text="Devices:").grid(row=1, column=0, sticky="nw", pady=(8,0))
         self.devices_list = tk.Listbox(top, height=6, width=40)
+        self.devices_list.configure(
+            background=DARK_THEME["input"],
+            foreground=DARK_THEME["text"],
+            selectbackground=DARK_THEME["selection"],
+            selectforeground=DARK_THEME["text"],
+            highlightbackground=DARK_THEME["border"],
+            highlightcolor=DARK_THEME["accent"],
+            relief=tk.FLAT,
+        )
         self.devices_list.grid(row=1, column=1, columnspan=3, sticky="w", pady=(8,0))
 
         # Sliders for color vibration levels
@@ -120,16 +144,39 @@ class TarkBuzzGUI:
         limb_frame.grid(row=2, column=1, sticky="nsew", padx=10, pady=8)
         
         self.limb_enabled = {}
+        self.limb_status_vars = {}
+        self.limb_status_labels = {}
         self.vibrating = False  # Track vibration state
         limb_keys = ["head", "thorax", "stomach", "right_arm", "left_arm", "right_leg", "left_leg"]
         limb_labels = ["Head", "Thorax", "Stomach", "Right Arm", "Left Arm", "Right Leg", "Left Leg"]
-        
-        for i, (key, label) in enumerate(zip(limb_keys, limb_labels)):
+        ttk.Label(
+            limb_frame,
+            text="Track",
+            style="LimbStatusHeader.TLabel",
+        ).grid(row=0, column=0, sticky="w")
+        ttk.Label(
+            limb_frame,
+            text="Detected",
+            style="LimbStatusHeader.TLabel",
+        ).grid(row=0, column=1, sticky="e")
+
+        for i, (key, label) in enumerate(zip(limb_keys, limb_labels), start=1):
             toggle_var = tk.BooleanVar(value=True)
             toggle_check = ttk.Checkbutton(limb_frame, text=label, variable=toggle_var)
             toggle_check.grid(row=i, column=0, sticky="w", pady=4)
             self.limb_enabled[key] = toggle_var
-        
+            status_var = tk.StringVar(value="Waiting")
+            status_label = ttk.Label(
+                limb_frame,
+                textvariable=status_var,
+                style="LimbStatus.Unknown.TLabel",
+                width=9,
+                anchor="e",
+            )
+            status_label.grid(row=i, column=1, sticky="e", padx=(12, 0), pady=4)
+            self.limb_status_vars[key] = status_var
+            self.limb_status_labels[key] = status_label
+
         # Dynamic buzzing toggle
         self.dynamic_buzz_enabled = tk.BooleanVar(value=False)
         dynamic_buzz_check = ttk.Checkbutton(
@@ -137,7 +184,7 @@ class TarkBuzzGUI:
             text="Dynamic Buzzing", 
             variable=self.dynamic_buzz_enabled
         )
-        dynamic_buzz_check.grid(row=len(limb_keys), column=0, sticky="w", pady=(8, 0))
+        dynamic_buzz_check.grid(row=len(limb_keys) + 1, column=0, sticky="w", pady=(8, 0))
 
         outcome_frame = ttk.LabelFrame(
             root,
@@ -186,6 +233,120 @@ class TarkBuzzGUI:
             padx=6,
             pady=(8, 0),
         )
+
+    def configure_dark_theme(self):
+        palette = DARK_THEME
+        self.root.configure(background=palette["window"])
+
+        style = ttk.Style(self.root)
+        style.theme_use("clam")
+        style.configure(
+            ".",
+            background=palette["window"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+            focuscolor=palette["accent"],
+        )
+        style.configure("TFrame", background=palette["window"])
+        style.configure(
+            "TLabel",
+            background=palette["window"],
+            foreground=palette["text"],
+        )
+        style.configure(
+            "TLabelframe",
+            background=palette["panel"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+        )
+        style.configure(
+            "TLabelframe.Label",
+            background=palette["panel"],
+            foreground=palette["text"],
+        )
+        style.configure(
+            "TButton",
+            background=palette["button"],
+            foreground=palette["text"],
+            bordercolor=palette["border"],
+            padding=(10, 5),
+        )
+        style.map(
+            "TButton",
+            background=[
+                ("pressed", palette["selection"]),
+                ("active", palette["button_active"]),
+            ],
+            foreground=[("disabled", palette["muted"])],
+        )
+        style.configure(
+            "TCheckbutton",
+            background=palette["panel"],
+            foreground=palette["text"],
+            indicatorcolor=palette["input"],
+            padding=3,
+        )
+        style.map(
+            "TCheckbutton",
+            background=[("active", palette["panel"])],
+            foreground=[("disabled", palette["muted"])],
+            indicatorcolor=[
+                ("selected", palette["accent"]),
+                ("active", palette["button_active"]),
+            ],
+        )
+        style.configure(
+            "TEntry",
+            fieldbackground=palette["input"],
+            foreground=palette["text"],
+            insertcolor=palette["text"],
+            bordercolor=palette["border"],
+        )
+        style.configure(
+            "Horizontal.TScale",
+            background=palette["panel"],
+            troughcolor=palette["input"],
+            bordercolor=palette["border"],
+        )
+        for status, foreground in {
+            "Unknown": palette["muted"],
+            "Green": "#69d391",
+            "Yellow": "#f2cd63",
+            "Red": "#ff7474",
+            "Black": "#e7eaf0",
+        }.items():
+            style.configure(
+                f"LimbStatus.{status}.TLabel",
+                background=palette["panel"],
+                foreground=foreground,
+                font=("TkDefaultFont", 9, "bold"),
+            )
+        style.configure(
+            "LimbStatusHeader.TLabel",
+            background=palette["panel"],
+            foreground=palette["muted"],
+        )
+
+    def update_limb_status(self, colors):
+        color_names = {
+            tuple(rgb): name.title()
+            for name, rgb in tarkbuzz.DETECTED_COLOUR_RGB.items()
+        }
+        statuses = {
+            limb: color_names.get(tuple(color), "Unknown")
+            if color is not None
+            else "Unknown"
+            for limb, color in colors.items()
+            if limb in self.limb_status_vars
+        }
+        self.root.after(0, self._apply_limb_status, statuses)
+
+    def _apply_limb_status(self, statuses):
+        for limb, status in statuses.items():
+            self.limb_status_vars[limb].set(status)
+            self.limb_status_labels[limb].configure(
+                style=f"LimbStatus.{status}.TLabel"
+            )
 
     def run_event_loop(self):
         """Run the asyncio event loop in a background thread"""
@@ -397,6 +558,7 @@ class TarkBuzzGUI:
 
                 # Get colors
                 colors = tarkbuzz.get_all_limb_colors()
+                self.update_limb_status(colors)
                 print(f"MONITOR COLORS: {colors}")
 
                 # Enabled limbs
@@ -492,6 +654,7 @@ class TarkBuzzGUI:
                 
                 # Sample all limb colors
                 colors = tarkbuzz.get_all_limb_colors()
+                self.update_limb_status(colors)
                 print(f"DEBUG: Sampled colors: {colors}")
 
                 # Get enabled limbs
