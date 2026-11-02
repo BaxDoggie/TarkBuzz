@@ -293,52 +293,90 @@ def _rotated_region_points(region, angle_degrees):
     ]
 
 
-def _rectified_health_sample(region, angle_degrees, screen_width, screen_height):
-    scaled_region = scale_region(region, screen_width, screen_height)
-    inset_sample = inset_region(scaled_region, DETECTION_INSET)
-    if angle_degrees == 0:
-        return camera.grab(region=inset_sample)
+def _capture_health_samples():
+    screen_width, screen_height = get_screen_resolution()
+    regions = {}
+    capture_regions = []
+    for limb, (region, angle_degrees) in CV_LIMB_REGIONS.items():
+        scaled_region = scale_region(region, screen_width, screen_height)
+        inset_sample = inset_region(scaled_region, DETECTION_INSET)
+        points = _rotated_region_points(inset_sample, angle_degrees)
+        limb_capture_region = (
+            int(np.floor(min(point[0] for point in points))),
+            int(np.floor(min(point[1] for point in points))),
+            int(np.ceil(max(point[0] for point in points))),
+            int(np.ceil(max(point[1] for point in points))),
+        )
+        regions[limb] = (
+            inset_sample,
+            angle_degrees,
+            points,
+            limb_capture_region,
+        )
+        capture_regions.append(limb_capture_region)
 
-    points = _rotated_region_points(inset_sample, angle_degrees)
     capture_region = (
-        int(np.floor(min(point[0] for point in points))),
-        int(np.floor(min(point[1] for point in points))),
-        int(np.ceil(max(point[0] for point in points))),
-        int(np.ceil(max(point[1] for point in points))),
+        min(region[0] for region in capture_regions),
+        min(region[1] for region in capture_regions),
+        max(region[2] for region in capture_regions),
+        max(region[3] for region in capture_regions),
     )
     frame = camera.grab(region=capture_region)
     if frame is None:
-        return None
+        return {limb: None for limb in CV_LIMB_REGIONS}
 
-    source_points = np.array(
-        [(x - capture_region[0], y - capture_region[1]) for x, y in points],
-        dtype=np.float32,
-    )
-    output_width = inset_sample[2] - inset_sample[0]
-    output_height = inset_sample[3] - inset_sample[1]
-    destination_points = np.array(
-        [
-            (0, 0),
-            (output_width - 1, 0),
-            (output_width - 1, output_height - 1),
-            (0, output_height - 1),
-        ],
-        dtype=np.float32,
-    )
-    transform = cv2.getPerspectiveTransform(source_points, destination_points)
-    return cv2.warpPerspective(frame, transform, (output_width, output_height))
+    samples = {}
+    for limb, (
+        inset_sample,
+        angle_degrees,
+        points,
+        limb_capture_region,
+    ) in regions.items():
+        output_width = inset_sample[2] - inset_sample[0]
+        output_height = inset_sample[3] - inset_sample[1]
+        if angle_degrees == 0:
+            samples[limb] = frame[
+                inset_sample[1] - capture_region[1]:inset_sample[3] - capture_region[1],
+                inset_sample[0] - capture_region[0]:inset_sample[2] - capture_region[0],
+            ]
+            continue
+
+        limb_frame = frame[
+            limb_capture_region[1] - capture_region[1]:limb_capture_region[3] - capture_region[1],
+            limb_capture_region[0] - capture_region[0]:limb_capture_region[2] - capture_region[0],
+        ]
+        source_points = np.array(
+            [
+                (x - limb_capture_region[0], y - limb_capture_region[1])
+                for x, y in points
+            ],
+            dtype=np.float32,
+        )
+        destination_points = np.array(
+            [
+                (0, 0),
+                (output_width - 1, 0),
+                (output_width - 1, output_height - 1),
+                (0, output_height - 1),
+            ],
+            dtype=np.float32,
+        )
+        transform = cv2.getPerspectiveTransform(
+            source_points,
+            destination_points,
+        )
+        samples[limb] = cv2.warpPerspective(
+            limb_frame,
+            transform,
+            (output_width, output_height),
+        )
+
+    return samples
 
 
 def is_full_body_green():
     """Return True only when every tested limb region is detected as green."""
-    screen_width, screen_height = get_screen_resolution()
-    for region, angle_degrees in CV_LIMB_REGIONS.values():
-        frame = _rectified_health_sample(
-            region,
-            angle_degrees,
-            screen_width,
-            screen_height,
-        )
+    for frame in _capture_health_samples().values():
         detected_level = detect_health_level(
             frame,
             minimum_percentage=MIN_COLOUR_PERCENTAGE,
@@ -420,9 +458,6 @@ def detect_limb_colour(frame, limb):
         limb,
         {"last": None, "unknown_samples": 0, "pending": None, "pending_samples": 0},
     )
-    if frame is None or frame.size == 0:
-        return DETECTED_COLOUR_RGB.get(state["last"])
-
     detected_level = detect_health_level(
         frame,
         minimum_percentage=MIN_COLOUR_PERCENTAGE,
@@ -461,19 +496,10 @@ def detect_limb_colour(frame, limb):
 
 
 def get_all_limb_colors():
-    screen_width, screen_height = get_screen_resolution()
-    colors = {}
-
-    for limb, (reference_region, angle_degrees) in CV_LIMB_REGIONS.items():
-        frame = _rectified_health_sample(
-            reference_region,
-            angle_degrees,
-            screen_width,
-            screen_height,
-        )
-        colors[limb] = detect_limb_colour(frame, limb)
-
-    return colors
+    return {
+        limb: detect_limb_colour(frame, limb)
+        for limb, frame in _capture_health_samples().items()
+    }
 
 
 def get_limb_detection_statuses():
