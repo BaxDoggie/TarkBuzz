@@ -657,4 +657,3 @@ async def run_dynamic_buzz_pattern(device, pattern):
     
     # Ensure device stops after pattern
     await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
-

@@ -6,7 +6,7 @@ import sqlite3
 import os
 import time
 
-import Buzzertest as bt
+import TarkBuzz as tarkbuzz
 
 
 # Default vibration levels (hardcoded)
@@ -53,10 +53,10 @@ def save_levels_to_db(levels_dict):
     conn.close()
 
 
-class BuzzGUI:
+class TarkBuzzGUI:
     def __init__(self, root):
         self.root = root
-        root.title("Buzz Test UI")
+        root.title("TarkBuzz UI")
 
         # Buttplug client and device list
         self.client = None
@@ -209,11 +209,11 @@ class BuzzGUI:
         save_levels_to_db(levels_to_save)
         
         # Update module variables
-        bt.green_limb = levels_to_save["green_limb"]
-        bt.yellow_limb = levels_to_save["yellow_limb"]
-        bt.orange_limb = levels_to_save["orange_limb"]
-        bt.red_limb = levels_to_save["red_limb"]
-        bt.black_limb = levels_to_save["black_limb"]
+        tarkbuzz.green_limb = levels_to_save["green_limb"]
+        tarkbuzz.yellow_limb = levels_to_save["yellow_limb"]
+        tarkbuzz.orange_limb = levels_to_save["orange_limb"]
+        tarkbuzz.red_limb = levels_to_save["red_limb"]
+        tarkbuzz.black_limb = levels_to_save["black_limb"]
         
         messagebox.showinfo("Saved", "Color vibration levels saved to database.")
 
@@ -244,7 +244,7 @@ class BuzzGUI:
         async def do_connect():
             try:
                 from buttplug.client import ButtplugClient
-                client = ButtplugClient("Buzz GUI")
+                client = ButtplugClient("TarkBuzz GUI")
                 await client.connect(url)
                 
                 # Success - update UI on main thread
@@ -300,7 +300,7 @@ class BuzzGUI:
                 if self.raid_end_outcome is not None:
                     if now >= self.raid_health_probe_at:
                         self.raid_health_probe_at = now + 10.0
-                        if bt.is_full_body_green():
+                        if tarkbuzz.is_full_body_green():
                             print("Gameplay resumed: all health regions are green")
                             if self.raid_vibration_until is not None:
                                 for device in self.devices:
@@ -312,7 +312,7 @@ class BuzzGUI:
                                     )
                             self.raid_end_outcome = None
                             self.raid_vibration_until = None
-                            bt.reset_raid_outcome_detection()
+                            tarkbuzz.reset_raid_outcome_detection()
                             self.root.after(
                                 0,
                                 lambda: self.raid_status_var.set(
@@ -347,7 +347,7 @@ class BuzzGUI:
                         await asyncio.sleep(0.1)
                         continue
 
-                outcome = bt.get_raid_outcome()
+                outcome = tarkbuzz.get_raid_outcome()
                 if outcome in ("kia", "survived", "run_through"):
                     self.raid_end_outcome = outcome
                     self.raid_health_probe_at = now + 10.0
@@ -396,7 +396,7 @@ class BuzzGUI:
                     continue
 
                 # Get colors
-                colors = bt.get_all_limb_colors()
+                colors = tarkbuzz.get_all_limb_colors()
                 print(f"MONITOR COLORS: {colors}")
 
                 # Enabled limbs
@@ -410,7 +410,7 @@ class BuzzGUI:
 
                 for limb in enabled_limbs:
                     if limb in colors:
-                        level = bt.get_vibration_for_limb(
+                        level = tarkbuzz.get_vibration_for_limb(
                             limb,
                             colors[limb]
                         )
@@ -491,7 +491,7 @@ class BuzzGUI:
                 from buttplug import DeviceOutputCommand, OutputType
                 
                 # Sample all limb colors
-                colors = bt.get_all_limb_colors()
+                colors = tarkbuzz.get_all_limb_colors()
                 print(f"DEBUG: Sampled colors: {colors}")
 
                 # Get enabled limbs
@@ -502,7 +502,7 @@ class BuzzGUI:
                 limb_levels = {}
                 for limb in enabled_limbs:
                     if limb in colors:
-                        level = bt.get_vibration_for_limb(limb, colors[limb])
+                        level = tarkbuzz.get_vibration_for_limb(limb, colors[limb])
                         limb_levels[limb] = level
                         print(f"DEBUG: {limb} color {colors[limb]} -> level {level}")
                 
@@ -515,12 +515,12 @@ class BuzzGUI:
                 if self.dynamic_buzz_enabled.get():
                     print("DEBUG: Using dynamic buzzing")
                     # Use dynamic buzzing pattern - send to all devices
-                    pattern = bt.calculate_dynamic_buzz_pattern(limb_levels)
+                    pattern = tarkbuzz.calculate_dynamic_buzz_pattern(limb_levels)
                     print(f"DEBUG: Pattern: {pattern}")
                     if pattern:
                         for i, device in enumerate(self.devices):
                             print(f"DEBUG: Sending pattern to device {i}: {device}")
-                            await bt.run_dynamic_buzz_pattern(device, pattern)
+                            await tarkbuzz.run_dynamic_buzz_pattern(device, pattern)
                         status_msg = f"Sent dynamic buzz pattern to {len(self.devices)} device(s)"
                     else:
                         # No damage detected (all green), send stop command to all
@@ -531,7 +531,7 @@ class BuzzGUI:
                     print("DEBUG: Using standard vibration")
                     # Standard vibration: use max damage level from enabled limbs
                     print("LIMB LEVELS:", limb_levels) #test, come back here
-                    print("BLACK:", bt.black_limb)
+                    print("BLACK:", tarkbuzz.black_limb)
                     max_level = max(limb_levels.values())
                     print(f"DEBUG: Max level calculated: {max_level}")
                     
@@ -573,7 +573,7 @@ class BuzzGUI:
 
 def main():
     root = tk.Tk()
-    app = BuzzGUI(root)
+    app = TarkBuzzGUI(root)
     root.mainloop()
 
 
