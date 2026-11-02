@@ -46,13 +46,23 @@ HEALTH_MIN_COLOUR_PERCENTAGE = 0.02
 HEALTH_TORSO_MIN_COLOUR_PERCENTAGE = 0.003
 
 CV_LIMB_REGIONS = {
-    "head": (80, 30, 118, 72),
-    "thorax": (75, 95, 111, 133),
+    "head": ((80, 27, 118, 72), 0),
+    "thorax": ((75, 75, 111, 113), 0),
+    "stomach": ((70, 125, 116, 163), 0),
+    "right_arm": ((127, 75, 147, 168), -21),
+    "left_arm": ((46, 75, 62, 168), 15),
+    "right_leg": ((110, 165, 130, 285), -12),
+    "left_leg": ((59, 165, 79, 285), 3),
 }
-PLACEHOLDER_LIMBS = ("stomach", "right_arm", "left_arm", "right_leg", "left_leg")
-MIN_COLOUR_PERCENTAGE = 0.02
-UNKNOWN_HOLD_SAMPLES = 3
+MIN_COLOUR_PERCENTAGE = 0.003
+UNKNOWN_HOLD_SAMPLES = 8
 COLOUR_CHANGE_SAMPLES = 2
+_DAMAGE_COLOURS_BY_LEVEL = {
+    0.0: "green",
+    0.25: "yellow",
+    0.5: "red",
+    1.0: "black",
+}
 DETECTED_COLOUR_RGB = {
     "green": (0, 255, 0),
     "yellow": (255, 255, 0),
@@ -423,18 +433,19 @@ def detect_health_level(frame, minimum_percentage, prefer_chromatic=False):
 
 
 def detect_limb_colour(frame, limb):
-    percentages = get_colour_percentages(frame)
-
-    detected_colour = None
-    if percentages:
-        colour, percentage = max(percentages.items(), key=lambda item: item[1])
-        if percentage >= MIN_COLOUR_PERCENTAGE:
-            detected_colour = colour
-
     state = _limb_detection_states.setdefault(
         limb,
         {"last": None, "unknown_samples": 0, "pending": None, "pending_samples": 0},
     )
+    if frame is None or frame.size == 0:
+        return DETECTED_COLOUR_RGB.get(state["last"])
+
+    detected_level = detect_health_level(
+        frame,
+        minimum_percentage=MIN_COLOUR_PERCENTAGE,
+        prefer_chromatic=True,
+    )
+    detected_colour = _DAMAGE_COLOURS_BY_LEVEL.get(detected_level)
 
     if detected_colour is None:
         state["unknown_samples"] += 1
@@ -468,12 +479,15 @@ def detect_limb_colour(frame, limb):
 
 def get_all_limb_colors():
     screen_width, screen_height = get_screen_resolution()
-    colors = {limb: None for limb in PLACEHOLDER_LIMBS}
+    colors = {}
 
-    for limb, reference_region in CV_LIMB_REGIONS.items():
-        scaled_region = scale_region(reference_region, screen_width, screen_height)
-        detection_region = inset_region(scaled_region, DETECTION_INSET)
-        frame = camera.grab(region=detection_region)
+    for limb, (reference_region, angle_degrees) in CV_LIMB_REGIONS.items():
+        frame = _rectified_health_sample(
+            reference_region,
+            angle_degrees,
+            screen_width,
+            screen_height,
+        )
         colors[limb] = detect_limb_colour(frame, limb)
 
     return colors
