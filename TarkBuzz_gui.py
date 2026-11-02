@@ -1,5 +1,6 @@
 import threading
 import asyncio
+import ctypes
 import tkinter as tk
 from tkinter import ttk, messagebox
 import sqlite3
@@ -78,10 +79,12 @@ class TarkBuzzGUI:
         self.devices = []
         self.polling = False
         self.monitoring = False
+        self.raid_started = False
         self.raid_end_outcome = None
         self.raid_health_probe_at = 0.0
         self.raid_vibration_until = None
         self.raid_vibration_enabled = {}
+        self.detection_overlay = None
         
         # Create a persistent event loop for async operations
         self.loop = asyncio.new_event_loop()
@@ -170,7 +173,7 @@ class TarkBuzzGUI:
                 limb_frame,
                 textvariable=status_var,
                 style="LimbStatus.Unknown.TLabel",
-                width=9,
+                width=15,
                 anchor="e",
             )
             status_label.grid(row=i, column=1, sticky="e", padx=(12, 0), pady=4)
@@ -224,7 +227,15 @@ class TarkBuzzGUI:
         actions.grid(row=5, column=0, sticky="ew")
         ttk.Button(actions, text="Vibrate Now (Head)", command=self.vibrate_head).grid(row=0, column=0, padx=6)
         ttk.Button(actions, text="Quit", command=self.on_quit).grid(row=0, column=1)
-        self.raid_status_var = tk.StringVar(value="Raid status: monitoring")
+        self.detection_overlay_button = ttk.Button(
+            actions,
+            text="Show Detection Areas",
+            command=self.toggle_detection_overlay,
+        )
+        self.detection_overlay_button.grid(row=0, column=2, padx=6)
+        self.raid_status_var = tk.StringVar(
+            value="Raid status: waiting for raid start (all health regions green)"
+        )
         ttk.Label(actions, textvariable=self.raid_status_var).grid(
             row=1,
             column=0,
@@ -233,6 +244,108 @@ class TarkBuzzGUI:
             padx=6,
             pady=(8, 0),
         )
+
+    def toggle_detection_overlay(self):
+        if self.detection_overlay is not None:
+            self.detection_overlay.destroy()
+            self.detection_overlay = None
+            self.detection_overlay_button.configure(text="Show Detection Areas")
+            return
+
+        screen_width, screen_height = tarkbuzz.get_screen_resolution()
+        overlay = tk.Toplevel(self.root)
+        overlay.overrideredirect(True)
+        overlay.attributes("-topmost", True)
+        overlay.attributes("-transparentcolor", "magenta")
+        overlay.geometry(f"{screen_width}x{screen_height}+0+0")
+
+        canvas = tk.Canvas(
+            overlay,
+            width=screen_width,
+            height=screen_height,
+            bg="magenta",
+            highlightthickness=0,
+        )
+        canvas.pack()
+
+        region_colors = {
+            "head": "#43d9ff",
+            "thorax": "#55e6a5",
+            "stomach": "#f0d44a",
+            "right_arm": "#ff9d45",
+            "left_arm": "#d68aff",
+            "right_leg": "#ff667a",
+            "left_leg": "#68a0ff",
+        }
+        for limb, (reference_region, angle_degrees) in tarkbuzz.CV_LIMB_REGIONS.items():
+            scaled_region = tarkbuzz.scale_region(
+                reference_region,
+                screen_width,
+                screen_height,
+            )
+            sample_region = tarkbuzz.inset_region(
+                scaled_region,
+                tarkbuzz.DETECTION_INSET,
+            )
+            points = tarkbuzz._rotated_region_points(
+                sample_region,
+                angle_degrees,
+            )
+            color = region_colors[limb]
+            canvas.create_polygon(
+                *[coordinate for point in points for coordinate in point],
+                outline=color,
+                fill="",
+                width=3,
+            )
+            canvas.create_text(
+                points[0][0] + 4,
+                points[0][1] + 4,
+                text=f"{limb.replace('_', ' ').title()} ({angle_degrees} deg)",
+                fill=color,
+                anchor="nw",
+                font=("TkDefaultFont", 11, "bold"),
+            )
+
+        raid_region = tarkbuzz.inset_region(
+            tarkbuzz.scale_region(
+                tarkbuzz.RAID_OUTCOME_REGION,
+                screen_width,
+                screen_height,
+            ),
+            tarkbuzz.DETECTION_INSET,
+        )
+        raid_points = (
+            (raid_region[0], raid_region[1]),
+            (raid_region[2], raid_region[1]),
+            (raid_region[2], raid_region[3]),
+            (raid_region[0], raid_region[3]),
+        )
+        canvas.create_polygon(
+            *[coordinate for point in raid_points for coordinate in point],
+            outline="#ffffff",
+            fill="",
+            width=3,
+        )
+        canvas.create_text(
+            raid_region[0] + 4,
+            raid_region[1] + 4,
+            text="Raid outcome",
+            fill="#ffffff",
+            anchor="nw",
+            font=("TkDefaultFont", 11, "bold"),
+        )
+
+        overlay.update_idletasks()
+        hwnd = ctypes.windll.user32.GetParent(overlay.winfo_id())
+        styles = ctypes.windll.user32.GetWindowLongW(hwnd, -20)
+        ctypes.windll.user32.SetWindowLongW(
+            hwnd,
+            -20,
+            styles | 0x20 | 0x80 | 0x8000000,
+        )
+        self.detection_overlay = overlay
+        self.detection_overlay_button.configure(text="Hide Detection Areas")
 
     def configure_dark_theme(self):
         palette = DARK_THEME
@@ -322,30 +435,28 @@ class TarkBuzzGUI:
                 font=("TkDefaultFont", 9, "bold"),
             )
         style.configure(
+            "LimbStatus.Checking.TLabel",
+            background=palette["panel"],
+            foreground="#f2cd63",
+            font=("TkDefaultFont", 9, "bold"),
+        )
+        style.configure(
             "LimbStatusHeader.TLabel",
             background=palette["panel"],
             foreground=palette["muted"],
         )
 
-    def update_limb_status(self, colors):
-        color_names = {
-            tuple(rgb): name.title()
-            for name, rgb in tarkbuzz.DETECTED_COLOUR_RGB.items()
-        }
-        statuses = {
-            limb: color_names.get(tuple(color), "Unknown")
-            if color is not None
-            else "Unknown"
-            for limb, color in colors.items()
-            if limb in self.limb_status_vars
-        }
+    def update_limb_status(self):
+        statuses = tarkbuzz.get_limb_detection_statuses()
         self.root.after(0, self._apply_limb_status, statuses)
 
     def _apply_limb_status(self, statuses):
-        for limb, status in statuses.items():
-            self.limb_status_vars[limb].set(status)
+        for limb, (text, style) in statuses.items():
+            if limb not in self.limb_status_vars:
+                continue
+            self.limb_status_vars[limb].set(text)
             self.limb_status_labels[limb].configure(
-                style=f"LimbStatus.{status}.TLabel"
+                style=f"LimbStatus.{style}.TLabel"
             )
 
     def run_event_loop(self):
@@ -414,6 +525,8 @@ class TarkBuzzGUI:
                 self.devices_list.delete(0, tk.END)
                 self.polling = True
                 self.monitoring = True
+                self.raid_started = False
+                tarkbuzz.reset_raid_outcome_detection()
                 self.run_async(self.monitor_loop())
                 self.root.after(0, lambda: messagebox.showinfo("Connected", "Successfully connected to Buttplug server"))
                 self.poll_devices()
@@ -456,6 +569,20 @@ class TarkBuzzGUI:
         while self.monitoring:
             try:
                 from buttplug import DeviceOutputCommand, OutputType
+
+                if not self.raid_started:
+                    if not tarkbuzz.is_full_body_green():
+                        await asyncio.sleep(0.5)
+                        continue
+
+                    self.raid_started = True
+                    print("All health regions are green; raid monitoring enabled")
+                    self.root.after(
+                        0,
+                        lambda: self.raid_status_var.set(
+                            "Raid status: in raid; monitoring"
+                        ),
+                    )
 
                 now = time.monotonic()
                 if self.raid_end_outcome is not None:
@@ -558,7 +685,7 @@ class TarkBuzzGUI:
 
                 # Get colors
                 colors = tarkbuzz.get_all_limb_colors()
-                self.update_limb_status(colors)
+                self.update_limb_status()
                 print(f"MONITOR COLORS: {colors}")
 
                 # Enabled limbs
@@ -654,7 +781,7 @@ class TarkBuzzGUI:
                 
                 # Sample all limb colors
                 colors = tarkbuzz.get_all_limb_colors()
-                self.update_limb_status(colors)
+                self.update_limb_status()
                 print(f"DEBUG: Sampled colors: {colors}")
 
                 # Get enabled limbs
@@ -718,6 +845,9 @@ class TarkBuzzGUI:
         self.run_async(do_vibrate())
 
     def on_quit(self):
+        if self.detection_overlay is not None:
+            self.detection_overlay.destroy()
+            self.detection_overlay = None
         try:
             self.polling = False
             self.monitoring = False

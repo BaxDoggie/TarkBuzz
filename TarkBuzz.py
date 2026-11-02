@@ -33,18 +33,6 @@ RUN_THROUGH_MIN_BADGE_FILL_RATIO = 0.65
 RAID_MIN_BADGE_DETAIL_RATIO = 0.005
 RAID_MAX_BADGE_CENTER_OFFSET = 0.15
 
-HEALTH_SAMPLE_REGIONS = {
-    "head": ((80, 27, 118, 72), 0),
-    "thorax": ((75, 75, 111, 113), 0),
-    "stomach": ((70, 125, 116, 163), 0),
-    "right_arm": ((127, 75, 147, 168), -21),
-    "left_arm": ((46, 75, 62, 168), 15),
-    "right_leg": ((110, 165, 130, 285), -12),
-    "left_leg": ((59, 165, 79, 285), 3),
-}
-HEALTH_MIN_COLOUR_PERCENTAGE = 0.02
-HEALTH_TORSO_MIN_COLOUR_PERCENTAGE = 0.003
-
 CV_LIMB_REGIONS = {
     "head": ((80, 27, 118, 72), 0),
     "thorax": ((75, 75, 111, 113), 0),
@@ -342,24 +330,19 @@ def _rectified_health_sample(region, angle_degrees, screen_width, screen_height)
 
 
 def is_full_body_green():
-    """Sample all tuned health regions and return True only when each is green."""
+    """Return True only when every tested limb region is detected as green."""
     screen_width, screen_height = get_screen_resolution()
-    for limb, (region, angle_degrees) in HEALTH_SAMPLE_REGIONS.items():
+    for region, angle_degrees in CV_LIMB_REGIONS.values():
         frame = _rectified_health_sample(
             region,
             angle_degrees,
             screen_width,
             screen_height,
         )
-        minimum_percentage = (
-            HEALTH_TORSO_MIN_COLOUR_PERCENTAGE
-            if limb == "thorax" or angle_degrees != 0
-            else HEALTH_MIN_COLOUR_PERCENTAGE
-        )
         detected_level = detect_health_level(
             frame,
-            minimum_percentage=minimum_percentage,
-            prefer_chromatic=(angle_degrees != 0),
+            minimum_percentage=MIN_COLOUR_PERCENTAGE,
+            prefer_chromatic=True,
         )
         if detected_level != 0.0:
             return False
@@ -491,6 +474,32 @@ def get_all_limb_colors():
         colors[limb] = detect_limb_colour(frame, limb)
 
     return colors
+
+
+def get_limb_detection_statuses():
+    statuses = {}
+    for limb in CV_LIMB_REGIONS:
+        state = _limb_detection_states.get(limb)
+        if state is None:
+            statuses[limb] = ("Waiting", "Unknown")
+            continue
+
+        pending_colour = state["pending"]
+        if pending_colour is not None and pending_colour != state["last"]:
+            statuses[limb] = (
+                f"Checking {pending_colour.title()}",
+                "Checking",
+            )
+        elif (
+            state["last"] is not None
+            and state["unknown_samples"] <= UNKNOWN_HOLD_SAMPLES
+        ):
+            statuses[limb] = (state["last"].title(), state["last"].title())
+        else:
+            statuses[limb] = ("Unknown", "Unknown")
+
+    return statuses
+
 
 def get_damage_level_for_color(color):
     if color is None:
