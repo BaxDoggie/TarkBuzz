@@ -45,6 +45,7 @@ CV_LIMB_REGIONS = {
 MIN_COLOUR_PERCENTAGE = 0.003
 UNKNOWN_HOLD_SAMPLES = 8
 COLOUR_CHANGE_SAMPLES = 2
+LIMB_SAMPLE_INTERVAL = 0.5
 _DAMAGE_COLOURS_BY_LEVEL = {
     0.0: "green",
     0.25: "yellow",
@@ -64,6 +65,7 @@ COLOUR_LEVELS = {
     DETECTED_COLOUR_RGB["black"]: 1.0,
 }
 _limb_detection_states = {}
+_last_limb_sample_time = 0.0
 
 
 
@@ -293,98 +295,55 @@ def _rotated_region_points(region, angle_degrees):
     ]
 
 
-def _capture_health_samples():
+def _capture_limb_sample(limb):
     screen_width, screen_height = get_screen_resolution()
-    regions = {}
-    capture_regions = []
-    for limb, (region, angle_degrees) in CV_LIMB_REGIONS.items():
-        scaled_region = scale_region(region, screen_width, screen_height)
-        inset_sample = inset_region(scaled_region, DETECTION_INSET)
-        points = _rotated_region_points(inset_sample, angle_degrees)
-        limb_capture_region = (
-            int(np.floor(min(point[0] for point in points))),
-            int(np.floor(min(point[1] for point in points))),
-            int(np.ceil(max(point[0] for point in points))),
-            int(np.ceil(max(point[1] for point in points))),
-        )
-        regions[limb] = (
-            inset_sample,
-            angle_degrees,
-            points,
-            limb_capture_region,
-        )
-        capture_regions.append(limb_capture_region)
-
+    region, angle_degrees = CV_LIMB_REGIONS[limb]
+    scaled_region = scale_region(region, screen_width, screen_height)
+    sample_region = inset_region(scaled_region, DETECTION_INSET)
+    sample_points = _rotated_region_points(sample_region, angle_degrees)
     capture_region = (
-        min(region[0] for region in capture_regions),
-        min(region[1] for region in capture_regions),
-        max(region[2] for region in capture_regions),
-        max(region[3] for region in capture_regions),
+        int(np.floor(min(point[0] for point in sample_points))),
+        int(np.floor(min(point[1] for point in sample_points))),
+        int(np.ceil(max(point[0] for point in sample_points))),
+        int(np.ceil(max(point[1] for point in sample_points))),
     )
     frame = camera.grab(region=capture_region)
     if frame is None:
-        return {limb: None for limb in CV_LIMB_REGIONS}
+        return None
 
-    samples = {}
-    for limb, (
-        inset_sample,
-        angle_degrees,
-        points,
-        limb_capture_region,
-    ) in regions.items():
-        output_width = inset_sample[2] - inset_sample[0]
-        output_height = inset_sample[3] - inset_sample[1]
-        if angle_degrees == 0:
-            samples[limb] = frame[
-                inset_sample[1] - capture_region[1]:inset_sample[3] - capture_region[1],
-                inset_sample[0] - capture_region[0]:inset_sample[2] - capture_region[0],
-            ]
-            continue
-
-        limb_frame = frame[
-            limb_capture_region[1] - capture_region[1]:limb_capture_region[3] - capture_region[1],
-            limb_capture_region[0] - capture_region[0]:limb_capture_region[2] - capture_region[0],
-        ]
-        source_points = np.array(
-            [
-                (x - limb_capture_region[0], y - limb_capture_region[1])
-                for x, y in points
-            ],
-            dtype=np.float32,
-        )
-        destination_points = np.array(
-            [
-                (0, 0),
-                (output_width - 1, 0),
-                (output_width - 1, output_height - 1),
-                (0, output_height - 1),
-            ],
-            dtype=np.float32,
-        )
-        transform = cv2.getPerspectiveTransform(
-            source_points,
-            destination_points,
-        )
-        samples[limb] = cv2.warpPerspective(
-            limb_frame,
-            transform,
-            (output_width, output_height),
-        )
-
-    return samples
+    source_points = np.array(
+        [
+            (x - capture_region[0], y - capture_region[1])
+            for x, y in sample_points
+        ],
+        dtype=np.float32,
+    )
+    output_width = sample_region[2] - sample_region[0]
+    output_height = sample_region[3] - sample_region[1]
+    destination_points = np.array(
+        [
+            (0, 0),
+            (output_width - 1, 0),
+            (output_width - 1, output_height - 1),
+            (0, output_height - 1),
+        ],
+        dtype=np.float32,
+    )
+    transform = cv2.getPerspectiveTransform(source_points, destination_points)
+    return cv2.warpPerspective(
+        frame,
+        transform,
+        (output_width, output_height),
+    )
 
 
 def is_full_body_green():
     """Return True only when every tested limb region is detected as green."""
-    for frame in _capture_health_samples().values():
-        detected_level = detect_health_level(
-            frame,
-            minimum_percentage=MIN_COLOUR_PERCENTAGE,
-            prefer_chromatic=True,
-        )
-        if detected_level != 0.0:
-            return False
-    return True
+    colors = get_all_limb_colors()
+    return all(
+        colors.get(limb) == DETECTED_COLOUR_RGB["green"]
+        for limb in CV_LIMB_REGIONS
+    )
 
 
 def get_colour_percentages(frame):
@@ -458,6 +417,15 @@ def detect_limb_colour(frame, limb):
         limb,
         {"last": None, "unknown_samples": 0, "pending": None, "pending_samples": 0},
     )
+    if frame is None:
+        current_colour = (
+            state["last"]
+            if state["last"] is not None
+            and state["unknown_samples"] <= UNKNOWN_HOLD_SAMPLES
+            else None
+        )
+        return DETECTED_COLOUR_RGB.get(current_colour)
+
     detected_level = detect_health_level(
         frame,
         minimum_percentage=MIN_COLOUR_PERCENTAGE,
@@ -496,10 +464,35 @@ def detect_limb_colour(frame, limb):
 
 
 def get_all_limb_colors():
-    return {
-        limb: detect_limb_colour(frame, limb)
-        for limb, frame in _capture_health_samples().items()
-    }
+    global _last_limb_sample_time
+
+    limbs = tuple(CV_LIMB_REGIONS)
+    now = time.monotonic()
+    if limbs and now - _last_limb_sample_time >= LIMB_SAMPLE_INTERVAL:
+        _last_limb_sample_time = now
+        # Spread region grabs across the tester's 0.5-second sample interval.
+        capture_spacing = LIMB_SAMPLE_INTERVAL / len(limbs)
+        for index, limb in enumerate(limbs):
+            frame = _capture_limb_sample(limb)
+            if frame is not None:
+                detect_limb_colour(frame, limb)
+            if index < len(limbs) - 1:
+                time.sleep(capture_spacing)
+
+    colors = {}
+    for limb in limbs:
+        state = _limb_detection_states.get(limb)
+        if state is None or state["unknown_samples"] > UNKNOWN_HOLD_SAMPLES:
+            colors[limb] = None
+        else:
+            colors[limb] = DETECTED_COLOUR_RGB.get(state["last"])
+    return colors
+
+
+def reset_limb_detection():
+    global _last_limb_sample_time
+    _limb_detection_states.clear()
+    _last_limb_sample_time = 0.0
 
 
 def get_limb_detection_statuses():
@@ -600,7 +593,7 @@ async def main():
             print(f"Calculated normal vibration level: {damage_level:.2f}")
             print(f"CV limb colors: {colors}")
 
-            await asyncio.sleep(0.5)
+            await asyncio.sleep(0.1)
             
             
     except KeyboardInterrupt:

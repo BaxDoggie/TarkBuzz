@@ -81,7 +81,6 @@ class TarkBuzzGUI:
         self.monitoring = False
         self.raid_started = False
         self.raid_end_outcome = None
-        self.raid_health_probe_at = 0.0
         self.raid_vibration_until = None
         self.raid_vibration_enabled = {}
         self.detection_overlay = None
@@ -526,6 +525,7 @@ class TarkBuzzGUI:
                 self.polling = True
                 self.monitoring = True
                 self.raid_started = False
+                tarkbuzz.reset_limb_detection()
                 tarkbuzz.reset_raid_outcome_detection()
                 self.run_async(self.monitor_loop())
                 self.root.after(0, lambda: messagebox.showinfo("Connected", "Successfully connected to Buttplug server"))
@@ -570,9 +570,17 @@ class TarkBuzzGUI:
             try:
                 from buttplug import DeviceOutputCommand, OutputType
 
+                colors = None
                 if not self.raid_started:
-                    if not tarkbuzz.is_full_body_green():
-                        await asyncio.sleep(0.5)
+                    colors = tarkbuzz.get_all_limb_colors()
+                    self.update_limb_status()
+                    all_regions_green = all(
+                        colors.get(limb)
+                        == tarkbuzz.DETECTED_COLOUR_RGB["green"]
+                        for limb in tarkbuzz.CV_LIMB_REGIONS
+                    )
+                    if not all_regions_green:
+                        await asyncio.sleep(0.1)
                         continue
 
                     self.raid_started = True
@@ -586,32 +594,32 @@ class TarkBuzzGUI:
 
                 now = time.monotonic()
                 if self.raid_end_outcome is not None:
-                    if now >= self.raid_health_probe_at:
-                        self.raid_health_probe_at = now + 10.0
-                        if tarkbuzz.is_full_body_green():
-                            print("Gameplay resumed: all health regions are green")
-                            if self.raid_vibration_until is not None:
-                                for device in self.devices:
-                                    await device.run_output(
-                                        DeviceOutputCommand(
-                                            OutputType.VIBRATE,
-                                            0.0,
-                                        )
+                    colors = tarkbuzz.get_all_limb_colors()
+                    self.update_limb_status()
+                    all_regions_green = all(
+                        colors.get(limb)
+                        == tarkbuzz.DETECTED_COLOUR_RGB["green"]
+                        for limb in tarkbuzz.CV_LIMB_REGIONS
+                    )
+                    if all_regions_green:
+                        print("Gameplay resumed: all health regions are green")
+                        if self.raid_vibration_until is not None:
+                            for device in self.devices:
+                                await device.run_output(
+                                    DeviceOutputCommand(
+                                        OutputType.VIBRATE,
+                                        0.0,
                                     )
-                            self.raid_end_outcome = None
-                            self.raid_vibration_until = None
-                            tarkbuzz.reset_raid_outcome_detection()
-                            self.root.after(
-                                0,
-                                lambda: self.raid_status_var.set(
-                                    "Raid status: monitoring"
-                                ),
+                                )
+                        self.raid_end_outcome = None
+                        self.raid_vibration_until = None
+                        tarkbuzz.reset_raid_outcome_detection()
+                        self.root.after(
+                            0,
+                            lambda: self.raid_status_var.set(
+                                "Raid status: monitoring"
                             )
-                        else:
-                            print(
-                                "Raid-end screen remains active; "
-                                "checking health again in 10 seconds"
-                            )
+                        )
 
                     if self.raid_end_outcome is not None:
                         if (
@@ -638,7 +646,6 @@ class TarkBuzzGUI:
                 outcome = tarkbuzz.get_raid_outcome()
                 if outcome in ("kia", "survived", "run_through"):
                     self.raid_end_outcome = outcome
-                    self.raid_health_probe_at = now + 10.0
                     if self.raid_vibration_enabled[outcome].get():
                         self.raid_vibration_until = now + 60.0
                         for device in self.devices:
@@ -683,9 +690,9 @@ class TarkBuzzGUI:
                     await asyncio.sleep(0.1)
                     continue
 
-                # Get colors
-                colors = tarkbuzz.get_all_limb_colors()
-                self.update_limb_status()
+                if colors is None:
+                    colors = tarkbuzz.get_all_limb_colors()
+                    self.update_limb_status()
                 print(f"MONITOR COLORS: {colors}")
 
                 # Enabled limbs
