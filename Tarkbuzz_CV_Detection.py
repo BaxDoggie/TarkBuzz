@@ -405,26 +405,12 @@ def get_colour_diagnostics(frame):
 def detect_damage_level(
     frame,
     minimum_percentage=MIN_COLOUR_PERCENTAGE,
-    torso=False,
-    prefer_chromatic=False
+    torso=False
 ):
     percentages = get_colour_percentages(frame, torso=torso)
 
     if not percentages:
         return None
-
-    if prefer_chromatic:
-        chromatic_candidates = {
-            0.0: percentages["green"],
-            0.25: percentages["yellow"],
-            0.5: percentages["red"],
-        }
-        chromatic_level, chromatic_percentage = max(
-            chromatic_candidates.items(),
-            key=lambda item: item[1]
-        )
-        if chromatic_percentage >= minimum_percentage:
-            return chromatic_level
 
     candidates = {
         0.0: percentages["green"],
@@ -709,8 +695,7 @@ def debug_arm_loop(name, region, angle_degrees):
                 percentages = get_colour_percentages(sample_frame)
                 detected_level = detect_damage_level(
                     sample_frame,
-                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE,
-                    prefer_chromatic=True
+                    minimum_percentage=TORSO_MIN_COLOUR_PERCENTAGE
                 )
                 level = update_detection_state(state, detected_level)
                 colour = damage_colours.get(level, "unknown")

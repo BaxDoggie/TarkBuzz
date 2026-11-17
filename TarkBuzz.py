@@ -46,6 +46,21 @@ MIN_COLOUR_PERCENTAGE = 0.003
 UNKNOWN_HOLD_SAMPLES = 8
 COLOUR_CHANGE_SAMPLES = 2
 LIMB_SAMPLE_INTERVAL = 0.5
+INVENTORY_TAB_REGIONS = {
+    "OVERALL": (455, 5, 685, 58),
+    "GEAR": (685, 5, 950, 58),
+    "HEALTH": (950, 5, 1165, 58),
+    "SKILLS": (1165, 5, 1400, 58),
+    "MAP": (1400, 5, 1645, 58),
+    "TASKS": (1645, 5, 1900, 58),
+    "ACHIEVEMENTS": (1900, 5, 2105, 58),
+    "PRESTIGE": (2105, 5, 2310, 58),
+}
+INVENTORY_MIN_TAB_WHITE_RATIO = 0.30
+INVENTORY_MIN_TAB_CONTRAST = 0.20
+INVENTORY_MIN_TAB_BAR_DARK_RATIO = 0.15
+INVENTORY_CONFIRM_SAMPLES = 3
+INVENTORY_SAMPLE_INTERVAL = 0.5
 _DAMAGE_COLOURS_BY_LEVEL = {
     0.0: "green",
     0.25: "yellow",
@@ -66,6 +81,12 @@ COLOUR_LEVELS = {
 }
 _limb_detection_states = {}
 _last_limb_sample_time = 0.0
+_inventory_detection_state = {
+    "confirmed": None,
+    "pending": None,
+    "pending_samples": 0,
+    "last_sample_time": 0.0,
+}
 
 
 
@@ -107,6 +128,113 @@ def scale_region(region, actual_width, actual_height):
 def inset_region(region, inset):
     left, top, right, bottom = region
     return left + inset, top + inset, right - inset, bottom - inset
+
+
+def _region_bounds(regions):
+    return (
+        min(region[0] for region in regions),
+        min(region[1] for region in regions),
+        max(region[2] for region in regions),
+        max(region[3] for region in regions),
+    )
+
+
+def _sample_region(frame, capture_region, sample_region, inset):
+    left, top, right, bottom = inset_region(sample_region, inset)
+    capture_left, capture_top, _, _ = capture_region
+    return frame[
+        top - capture_top:bottom - capture_top,
+        left - capture_left:right - capture_left,
+    ]
+
+
+def _bright_neutral_ratio(frame, capture_region, sample_region, inset):
+    sample = _sample_region(frame, capture_region, sample_region, inset)
+    if sample.size == 0:
+        return 0.0
+
+    darkest_channel = sample.min(axis=2)
+    brightest_channel = sample.max(axis=2)
+    bright_neutral = (
+        (darkest_channel > 170)
+        & ((brightest_channel - darkest_channel) < 70)
+    )
+    return cv2.countNonZero(bright_neutral.astype(np.uint8)) / bright_neutral.size
+
+
+def _dark_pixel_ratio(frame, capture_region, sample_region, inset):
+    sample = _sample_region(frame, capture_region, sample_region, inset)
+    if sample.size == 0:
+        return 0.0
+
+    grayscale = cv2.cvtColor(sample, cv2.COLOR_BGR2GRAY)
+    dark_pixels = grayscale < 100
+    return cv2.countNonZero(dark_pixels.astype(np.uint8)) / dark_pixels.size
+
+
+def get_inventory_status():
+    """Return Checking, In inventory, or Not in inventory."""
+    state = _inventory_detection_state
+    now = time.monotonic()
+    if now - state["last_sample_time"] >= INVENTORY_SAMPLE_INTERVAL:
+        state["last_sample_time"] = now
+        screen_width, screen_height = get_screen_resolution()
+        scaled_tabs = {
+            name: scale_region(region, screen_width, screen_height)
+            for name, region in INVENTORY_TAB_REGIONS.items()
+        }
+        capture_region = _region_bounds(list(scaled_tabs.values()))
+        frame = camera.grab(region=capture_region)
+        if frame is not None:
+            tab_scores = {
+                name: _bright_neutral_ratio(
+                    frame,
+                    capture_region,
+                    region,
+                    inset=DETECTION_INSET,
+                )
+                for name, region in scaled_tabs.items()
+            }
+            ranked_tabs = sorted(
+                tab_scores.items(),
+                key=lambda item: item[1],
+                reverse=True,
+            )
+            selected_tab_ratio = ranked_tabs[0][1]
+            tab_contrast = selected_tab_ratio - ranked_tabs[1][1]
+            tab_bar_dark_ratio = _dark_pixel_ratio(
+                frame,
+                capture_region,
+                capture_region,
+                inset=DETECTION_INSET,
+            )
+            detected_inventory = (
+                selected_tab_ratio >= INVENTORY_MIN_TAB_WHITE_RATIO
+                and tab_contrast >= INVENTORY_MIN_TAB_CONTRAST
+                and tab_bar_dark_ratio >= INVENTORY_MIN_TAB_BAR_DARK_RATIO
+            )
+
+            if detected_inventory == state["pending"]:
+                state["pending_samples"] += 1
+            else:
+                state["pending"] = detected_inventory
+                state["pending_samples"] = 1
+
+            if state["pending_samples"] >= INVENTORY_CONFIRM_SAMPLES:
+                state["confirmed"] = detected_inventory
+
+    if state["confirmed"] is None:
+        return "Checking"
+    return "In inventory" if state["confirmed"] else "Not in inventory"
+
+
+def reset_inventory_detection():
+    _inventory_detection_state.update({
+        "confirmed": None,
+        "pending": None,
+        "pending_samples": 0,
+        "last_sample_time": 0.0,
+    })
 
 
 def _raid_badge_detected(
@@ -384,23 +512,10 @@ def get_colour_percentages(frame):
     }
 
 
-def detect_health_level(frame, minimum_percentage, prefer_chromatic=False):
+def detect_health_level(frame, minimum_percentage):
     percentages = get_colour_percentages(frame)
     if not percentages:
         return None
-
-    if prefer_chromatic:
-        chromatic_candidates = {
-            0.0: percentages["green"],
-            0.25: percentages["yellow"],
-            0.5: percentages["red"],
-        }
-        level, percentage = max(
-            chromatic_candidates.items(),
-            key=lambda item: item[1],
-        )
-        if percentage >= minimum_percentage:
-            return level
 
     candidates = {
         0.0: percentages["green"],
@@ -429,7 +544,6 @@ def detect_limb_colour(frame, limb):
     detected_level = detect_health_level(
         frame,
         minimum_percentage=MIN_COLOUR_PERCENTAGE,
-        prefer_chromatic=True,
     )
     detected_colour = _DAMAGE_COLOURS_BY_LEVEL.get(detected_level)
 

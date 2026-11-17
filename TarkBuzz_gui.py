@@ -84,6 +84,7 @@ class TarkBuzzGUI:
         self.raid_vibration_until = None
         self.raid_vibration_enabled = {}
         self.detection_overlay = None
+        self._last_inventory_status = None
         
         # Create a persistent event loop for async operations
         self.loop = asyncio.new_event_loop()
@@ -243,6 +244,15 @@ class TarkBuzzGUI:
             padx=6,
             pady=(8, 0),
         )
+        self.inventory_status_var = tk.StringVar(value="Inventory: Checking")
+        ttk.Label(actions, textvariable=self.inventory_status_var).grid(
+            row=2,
+            column=0,
+            columnspan=2,
+            sticky="w",
+            padx=6,
+            pady=(4, 0),
+        )
 
     def toggle_detection_overlay(self):
         if self.detection_overlay is not None:
@@ -304,6 +314,29 @@ class TarkBuzzGUI:
                 fill=color,
                 anchor="nw",
                 font=("TkDefaultFont", 11, "bold"),
+            )
+
+        for tab, reference_region in tarkbuzz.INVENTORY_TAB_REGIONS.items():
+            tab_region = tarkbuzz.inset_region(
+                tarkbuzz.scale_region(
+                    reference_region,
+                    screen_width,
+                    screen_height,
+                ),
+                tarkbuzz.DETECTION_INSET,
+            )
+            canvas.create_rectangle(
+                *tab_region,
+                outline="#ff55d8",
+                width=2,
+            )
+            canvas.create_text(
+                tab_region[0] + 4,
+                tab_region[1] + 4,
+                text=f"Inventory {tab}",
+                fill="#ff55d8",
+                anchor="nw",
+                font=("TkDefaultFont", 10, "bold"),
             )
 
         raid_region = tarkbuzz.inset_region(
@@ -526,7 +559,9 @@ class TarkBuzzGUI:
                 self.monitoring = True
                 self.raid_started = False
                 tarkbuzz.reset_limb_detection()
+                tarkbuzz.reset_inventory_detection()
                 tarkbuzz.reset_raid_outcome_detection()
+                self._last_inventory_status = None
                 self.run_async(self.monitor_loop())
                 self.root.after(0, lambda: messagebox.showinfo("Connected", "Successfully connected to Buttplug server"))
                 self.poll_devices()
@@ -569,6 +604,16 @@ class TarkBuzzGUI:
         while self.monitoring:
             try:
                 from buttplug import DeviceOutputCommand, OutputType
+
+                inventory_status = tarkbuzz.get_inventory_status()
+                if inventory_status != self._last_inventory_status:
+                    self._last_inventory_status = inventory_status
+                    self.root.after(
+                        0,
+                        lambda status=inventory_status: self.inventory_status_var.set(
+                            f"Inventory: {status}"
+                        ),
+                    )
 
                 colors = None
                 if not self.raid_started:
