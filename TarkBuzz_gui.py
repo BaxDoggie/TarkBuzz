@@ -16,6 +16,8 @@ import TarkBuzz as tarkbuzz
 
 log = logging.getLogger("tarkbuzz")
 
+TEST_VIBRATION_SECONDS = 3
+
 RAID_OUTCOME_LABELS = {
     "kia": "killed in action",
     "survived": "survived",
@@ -120,6 +122,7 @@ class TarkBuzzGUI:
         self.connecting = False
         self.monitor_generation = 0
         self.monitor_task = None
+        self.testing_vibration = False
         self._sent_levels = {}
 
         # Create a persistent event loop for async operations
@@ -189,7 +192,6 @@ class TarkBuzzGUI:
         self.limb_enabled = {}
         self.limb_status_vars = {}
         self.limb_status_labels = {}
-        self.vibrating = False  # Track vibration state
         limb_keys = ["head", "thorax", "stomach", "right_arm", "left_arm", "right_leg", "left_leg"]
         limb_labels = ["Head", "Thorax", "Stomach", "Right Arm", "Left Arm", "Right Leg", "Left Leg"]
         ttk.Label(
@@ -288,7 +290,12 @@ class TarkBuzzGUI:
         # Action buttons
         actions = ttk.Frame(root, padding=10)
         actions.grid(row=5, column=0, sticky="ew")
-        ttk.Button(actions, text="Vibrate Now (Head)", command=self.vibrate_head).grid(row=0, column=0, padx=6)
+        self.test_button = ttk.Button(
+            actions,
+            text=f"Test Vibration ({TEST_VIBRATION_SECONDS:g} s)",
+            command=self.test_vibration,
+        )
+        self.test_button.grid(row=0, column=0, padx=6)
         ttk.Button(actions, text="Quit", command=self.on_quit).grid(row=0, column=1)
         self.detection_overlay_button = ttk.Button(
             actions,
@@ -646,14 +653,22 @@ class TarkBuzzGUI:
             await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, level))
             self._sent_levels[key] = level
 
-    async def play_pattern(self, pattern):
-        devices = list(self.devices)
-        await asyncio.gather(
-            *(tarkbuzz.run_dynamic_buzz_pattern(d, pattern) for d in devices)
-        )
-        # run_dynamic_buzz_pattern always finishes by stopping the device.
-        for device in devices:
-            self._sent_levels[id(device)] = 0.0
+    async def play_pattern(self, pattern, generation, is_test=False):
+        """Play a dynamic buzz pattern on every device, then stop them.
+
+        Checks the monitor generation before every pulse, so a pattern
+        stops at once when monitoring is disconnected or quit instead of
+        pulsing on after the stop command. A monitor pattern also yields
+        as soon as Test Vibration starts.
+        """
+        for intensity, duration_ms in pattern:
+            if not self._monitor_active(generation):
+                return
+            if self.testing_vibration and not is_test:
+                return
+            await self.set_all_devices(intensity, generation=generation)
+            await asyncio.sleep(duration_ms / 1000.0)
+        await self.set_all_devices(0.0, generation=generation)
 
     async def stop_all_devices(self):
         try:
@@ -870,6 +885,11 @@ class TarkBuzzGUI:
                     await asyncio.sleep(0.5)
                     continue
 
+                if self.testing_vibration:
+                    # Test Vibration owns the devices until it finishes.
+                    await asyncio.sleep(0.1)
+                    continue
+
                 if (
                     self.pause_in_inventory_state
                     and inventory_status == "In inventory"
@@ -880,7 +900,7 @@ class TarkBuzzGUI:
                         self.damaged_limb_levels(colors)
                     )
                     if pattern:
-                        await self.play_pattern(pattern)
+                        await self.play_pattern(pattern, generation)
                         continue
                     await self.set_all_devices(0.0, generation=generation)
                 else:
@@ -920,67 +940,54 @@ class TarkBuzzGUI:
 
         self.run_async(do_disconnect())
 
-    def vibrate_head(self):
-        if self.vibrating:
-            # Stop vibration
-            async def stop_vibrate():
-                try:
-                    await self.set_all_devices(0.0, force=True)
-                    self.vibrating = False
-                    self.call_in_ui(
-                        messagebox.showinfo,
-                        "Stopped",
-                        "Vibration stopped on all devices",
-                    )
-                except Exception as e:
-                    self.call_in_ui(messagebox.showerror, "Error", str(e))
+    def test_vibration(self):
+        """Vibrate for a few seconds at what the ticked limbs currently give.
 
-            self.run_async(stop_vibrate())
-            return
-
-        # Start vibration
+        The monitor loop holds off while the test runs, so the test level is
+        not overwritten, and the devices stop on their own afterwards.
+        """
         if not self.devices:
             messagebox.showerror("Error", "No devices connected. Connect a device first.")
             return
+        if self.testing_vibration:
+            return
+        self.testing_vibration = True
+        self.test_button.state(["disabled"])
+        generation = self.monitor_generation
 
-        async def do_vibrate():
+        async def run_test():
             try:
                 colors = await self.sample_limbs()
                 limb_levels = self.enabled_limb_levels(colors)
-                log.debug("Vibrate Now: colours %s, levels %s", colors, limb_levels)
-
-                if not limb_levels:
-                    raise RuntimeError("Could not sample any limb colors")
+                log.debug("Test vibration: colours %s, levels %s", colors, limb_levels)
 
                 if self.dynamic_buzz_state:
                     pattern = tarkbuzz.calculate_dynamic_buzz_pattern(
                         self.damaged_limb_levels(colors)
                     )
-                    log.debug("Vibrate Now: dynamic pattern %s", pattern)
                     if pattern:
-                        await self.play_pattern(pattern)
-                        status_msg = f"Sent dynamic buzz pattern to {len(self.devices)} device(s)"
+                        await self.play_pattern(pattern, generation, is_test=True)
+                        message = "Played one dynamic buzz pattern."
                     else:
-                        # No damage detected (all green), send stop command to all
-                        await self.set_all_devices(0.0, force=True)
-                        status_msg = "No damage detected - no buzzing sent"
+                        message = "No damage detected, so dynamic buzzing has nothing to play."
                 else:
-                    max_level = max(limb_levels.values())
-                    await self.set_all_devices(max_level, force=True)
-                    status_msg = f"Sent vibration {max_level:.2f} to {len(self.devices)} device(s)"
-
-                log.info(status_msg)
-                self.vibrating = True
-                self.call_in_ui(
-                    messagebox.showinfo,
-                    "Vibrate",
-                    status_msg + "\n\nPress 'Vibrate Now' again to stop",
-                )
+                    level = max(limb_levels.values(), default=0.0)
+                    await self.set_all_devices(level, force=True, generation=generation)
+                    await asyncio.sleep(TEST_VIBRATION_SECONDS)
+                    await self.set_all_devices(0.0, force=True, generation=generation)
+                    message = (
+                        f"Vibrated at {level:.2f} for {TEST_VIBRATION_SECONDS:g} seconds."
+                    )
+                log.info("Test vibration: %s", message)
+                self.call_in_ui(messagebox.showinfo, "Test Vibration", message)
             except Exception as e:
-                log.exception("Vibrate Now failed")
-                self.call_in_ui(messagebox.showerror, "Vibrate error", str(e))
+                log.exception("Test vibration failed")
+                self.call_in_ui(messagebox.showerror, "Test Vibration error", str(e))
+            finally:
+                self.testing_vibration = False
+                self.call_in_ui(self.test_button.state, ["!disabled"])
 
-        self.run_async(do_vibrate())
+        self.run_async(run_test())
 
     def on_quit(self):
         if self.detection_overlay is not None:

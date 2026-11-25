@@ -178,6 +178,38 @@ class MonitorTests(GuiTestCase):
         self.run_ui({0: self.app.connect_client}, ticks=15)
         self.assertNotIn(0.5, self.device.levels)
 
+    def test_dynamic_pattern_stops_when_disconnected(self):
+        self.app.dynamic_buzz_enabled.set(True)
+        self.run_ui(
+            {
+                0: self.app.connect_client,
+                10: self.set_phase(colors=RED),
+                16: self.app.disconnect,
+            },
+            ticks=30,
+        )
+        client = _support.FakeClient.instances[0]
+        sent_before_disconnect = client.levels_at_disconnect[0]
+        self.assertEqual(len(self.device.levels), sent_before_disconnect)
+        self.assertEqual(self.device.levels[-1], 0.0)
+
+    def test_test_vibration_is_not_overwritten_by_monitor(self):
+        with mock.patch.object(gui, "TEST_VIBRATION_SECONDS", 1):
+            self.run_ui(
+                {
+                    0: self.app.connect_client,
+                    10: self.set_phase(colors=RED),
+                    16: self.app.test_vibration,
+                    17: self.set_phase(colors=GREEN),
+                },
+                ticks=32,
+            )
+        # monitor: 0 then 0.75; test: 0.75 held for 1 s, then 0;
+        # monitor resumes with the now-green limbs, already at 0.
+        self.assertEqual(self.device.levels, [0.0, 0.75, 0.75, 0.0])
+        self.assertIn("Vibrated at 0.75", self.info.call_args_list[-1].args[1])
+        self.assertFalse(self.app.testing_vibration)
+
 
 class ConnectionTests(GuiTestCase):
     def test_second_connect_is_refused(self):

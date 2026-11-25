@@ -485,7 +485,7 @@ def debug_kia_loop():
 
     try:
         while True:
-            frame = get_camera().grab(region=detection_region)
+            frame = get_camera().grab(region=detection_region, new_frame_only=False)
             if frame is not None:
                 detected_kia, kia_metrics = detect_kia_badge(frame)
                 detected_survived, survived_metrics = detect_survived_badge(
@@ -578,7 +578,7 @@ def debug_inventory_loop():
 
     try:
         while True:
-            frame = get_camera().grab(region=capture_region)
+            frame = get_camera().grab(region=capture_region, new_frame_only=False)
             if frame is not None:
                 tab_scores = {
                     name: bright_neutral_ratio(
@@ -692,7 +692,7 @@ def debug_arm_loop(name, region, angle_degrees):
 
     try:
         while True:
-            frame = get_camera().grab(region=arm_capture_region)
+            frame = get_camera().grab(region=arm_capture_region, new_frame_only=False)
             if frame is not None:
                 sample_frame = rectify_region(
                     frame,

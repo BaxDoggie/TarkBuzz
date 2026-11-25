@@ -47,6 +47,9 @@ class FakeClient:
 
     async def disconnect(self):
         self.disconnected = True
+        self.levels_at_disconnect = {
+            key: len(device.levels) for key, device in self.devices.items()
+        }
 
 
 if "TarkBuzz" not in sys.modules:

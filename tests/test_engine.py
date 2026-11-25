@@ -1,4 +1,7 @@
 import unittest
+from unittest import mock
+
+import numpy as np
 
 import _support  # noqa: F401  (must come before TarkBuzz)
 import TarkBuzz as tb
@@ -88,6 +91,60 @@ class DynamicPatternTests(unittest.TestCase):
     def test_pattern_pulses_at_worst_level(self):
         pattern = tb.calculate_dynamic_buzz_pattern({"head": 0.75, "thorax": 0.25})
         self.assertEqual({level for level, _ in pattern}, {0.75, 0.0})
+
+
+class FakeCamera:
+    """Returns queued frames, then None (as dxcam does for a still screen)."""
+
+    def __init__(self, frames=()):
+        self.frames = list(frames)
+        self.regions = []
+
+    def grab(self, region):
+        self.regions.append(region)
+        return self.frames.pop(0) if self.frames else None
+
+
+class GrabTests(unittest.TestCase):
+    def setUp(self):
+        tb._last_frames.clear()
+        self.addCleanup(tb._last_frames.clear)
+
+    def test_still_screen_reuses_last_frame_for_that_region(self):
+        frame = np.full((4, 4, 3), 7, dtype=np.uint8)
+        camera = FakeCamera([frame])
+        with mock.patch.object(tb, "get_camera", lambda: camera):
+            first = tb._grab((0, 0, 4, 4))
+            second = tb._grab((0, 0, 4, 4))
+        self.assertIs(first, frame)
+        np.testing.assert_array_equal(second, frame)
+        self.assertIsNot(second, frame)  # a copy, safe to modify
+
+    def test_cache_is_kept_per_region_across_interleaved_grabs(self):
+        a = np.full((2, 2, 3), 1, dtype=np.uint8)
+        b = np.full((2, 2, 3), 2, dtype=np.uint8)
+        camera = FakeCamera([a, b])
+        with mock.patch.object(tb, "get_camera", lambda: camera):
+            tb._grab((0, 0, 2, 2))
+            tb._grab((10, 10, 12, 12))
+            again_a = tb._grab((0, 0, 2, 2))
+        np.testing.assert_array_equal(again_a, a)
+
+    def test_region_never_captured_gives_none(self):
+        with mock.patch.object(tb, "get_camera", lambda: FakeCamera()):
+            self.assertIsNone(tb._grab((0, 0, 2, 2)))
+
+    def test_all_detectors_capture_through_the_cache(self):
+        grabbed = []
+        with mock.patch.object(tb, "_grab", lambda r: grabbed.append(r)):
+            tb.reset_raid_outcome_detection()
+            tb.reset_inventory_detection()
+            tb.get_raid_outcome()
+            tb.get_inventory_status()
+            tb._capture_limb_sample("head")
+        tb.reset_raid_outcome_detection()
+        tb.reset_inventory_detection()
+        self.assertEqual(len(grabbed), 3)
 
 
 if __name__ == "__main__":

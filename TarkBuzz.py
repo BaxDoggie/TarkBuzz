@@ -137,6 +137,28 @@ def get_camera():
     return _camera
 
 
+_last_frames = {}
+
+
+def _grab(region):
+    """Capture a screen region, reusing the last capture if nothing changed.
+
+    dxcam returns None when nothing on screen changed since the last
+    capture. A still screen (such as the raid results screen with the mouse
+    not moving) would then never give the repeated samples the detectors
+    need. dxcam's own new_frame_only=False fallback only remembers the
+    single most recent region, and TarkBuzz alternates between many
+    regions, so keep one cached frame per region here instead.
+    """
+    region = tuple(int(v) for v in region)
+    frame = get_camera().grab(region=region)
+    if frame is not None:
+        _last_frames[region] = frame
+        return frame
+    cached = _last_frames.get(region)
+    return None if cached is None else cached.copy()
+
+
 def get_screen_resolution():
     return (
         ctypes.windll.user32.GetSystemMetrics(0),
@@ -251,7 +273,7 @@ def get_inventory_status():
             for name, region in INVENTORY_TAB_REGIONS.items()
         }
         capture_region = _region_bounds(list(scaled_tabs.values()))
-        frame = get_camera().grab(region=capture_region)
+        frame = _grab(capture_region)
         if frame is not None:
             tab_scores = {
                 name: _bright_neutral_ratio(
@@ -426,7 +448,7 @@ def get_raid_outcome():
         screen_height,
         RAID_OUTCOME_ANCHOR,
     )
-    frame = get_camera().grab(region=inset_region(scaled_region, DETECTION_INSET))
+    frame = _grab(inset_region(scaled_region, DETECTION_INSET))
     if frame is None:
         return _raid_outcome_state["confirmed"]
 
@@ -505,7 +527,7 @@ def _capture_limb_sample(limb):
         int(np.ceil(max(point[0] for point in sample_points))),
         int(np.ceil(max(point[1] for point in sample_points))),
     )
-    frame = get_camera().grab(region=capture_region)
+    frame = _grab(capture_region)
     if frame is None:
         return None
 
