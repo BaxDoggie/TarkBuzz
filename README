@@ -32,7 +32,7 @@ Please refer to the Interface Central documentation before setting this up and u
 4. Click **Connect** (default server `ws://localhost:12345`). Your devices appear in the list.
 5. Use **Show Detection Areas** in game to check the boxes line up with the health figure.
 
-Detection areas were tuned on a 3440x1440 screen. Other resolutions are scaled from that by screen height (health figure anchored to the top-left, menus and the raid-outcome banner to the centre); check them with **Show Detection Areas**.
+Detection areas were tuned on a 3440x1440 screen. Other resolutions are scaled from that (width and height separately), which may not line up on other aspect ratios; check them with **Show Detection Areas**.
 
 Set the `TARKBUZZ_DEBUG=1` environment variable to log detected limb colours and levels.
 

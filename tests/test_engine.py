@@ -7,7 +7,6 @@ import _support  # noqa: F401  (must come before TarkBuzz)
 import TarkBuzz as tb
 
 REF = (tb.Reference_screen_width, tb.Reference_screen_height)
-ALL_ANCHORS = (tb.ANCHOR_TOP_LEFT, tb.ANCHOR_CENTER)
 
 
 def all_regions():
@@ -18,42 +17,32 @@ def all_regions():
 
 
 class ScalingTests(unittest.TestCase):
-    def test_reference_resolution_is_unchanged_for_every_anchor(self):
+    """Scaling must match the detection test bench: width and height are
+    scaled separately from the 3440x1440 reference, truncating to ints."""
+
+    def test_reference_resolution_is_unchanged(self):
         for region in all_regions():
-            for anchor in ALL_ANCHORS:
-                self.assertEqual(tb.scale_region(region, *REF, anchor), region)
+            self.assertEqual(tb.scale_region(region, *REF), region)
 
-    def test_health_figure_keeps_its_size_on_16_9_at_same_height(self):
-        for region, _ in tb.CV_LIMB_REGIONS.values():
-            self.assertEqual(
-                tb.scale_region(region, 2560, 1440, tb.LIMB_ANCHOR), region
-            )
-
-    def test_centre_regions_shift_with_screen_centre(self):
-        left, top, right, bottom = tb.RAID_OUTCOME_REGION
-        shift = (3440 - 2560) // 2
+    def test_width_and_height_scale_separately(self):
         self.assertEqual(
-            tb.scale_region(tb.RAID_OUTCOME_REGION, 2560, 1440, tb.ANCHOR_CENTER),
-            (left - shift, top, right - shift, bottom),
+            tb.scale_region((3440, 1440, 1720, 720), 1920, 1080),
+            (1920, 1080, 960, 540),
         )
 
-    def test_1080p_scales_uniformly_so_rotated_limbs_keep_their_shape(self):
-        region = tb.CV_LIMB_REGIONS["left_arm"][0]
-        scaled = tb.scale_region(region, 1920, 1080, tb.LIMB_ANCHOR)
-        self.assertEqual(scaled, tuple(round(v * 0.75) for v in region))
-
-    def test_centre_regions_stay_on_screen_for_16_10(self):
-        for name, region in tb.INVENTORY_TAB_REGIONS.items():
-            left, top, right, bottom = tb.scale_region(
-                region, 1920, 1200, tb.INVENTORY_ANCHOR
-            )
-            self.assertGreaterEqual(left, 0, name)
-            self.assertLessEqual(right, 1920, name)
-            self.assertGreaterEqual(top, 0, name)
-
-    def test_unknown_anchor_raises(self):
-        with self.assertRaises(ValueError):
-            tb.scale_region((0, 0, 1, 1), *REF, "nowhere")
+    def test_matches_test_bench_formula_at_other_resolutions(self):
+        for width, height in [(2560, 1440), (1920, 1080), (3840, 2160), (1920, 1200)]:
+            for left, top, right, bottom in all_regions():
+                expected = (
+                    int(left * width / 3440),
+                    int(top * height / 1440),
+                    int(right * width / 3440),
+                    int(bottom * height / 1440),
+                )
+                self.assertEqual(
+                    tb.scale_region((left, top, right, bottom), width, height),
+                    expected,
+                )
 
 
 class ImportTests(unittest.TestCase):

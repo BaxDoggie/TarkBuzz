@@ -166,49 +166,20 @@ def get_screen_resolution():
     )
 
 
-# How each group of regions moves when the resolution differs from the
-# 3440x1440 reference. The UI is assumed to scale with screen height:
-# - ANCHOR_TOP_LEFT: pinned to the top-left corner (in-raid health figure).
-# - ANCHOR_CENTER: laid out around the screen centre (menus, raid outcome),
-#   limited to a 16:9 area so narrower screens (16:10) still fit.
-# At the reference resolution both anchors give the original coordinates.
-ANCHOR_TOP_LEFT = "top_left"
-ANCHOR_CENTER = "center"
-LIMB_ANCHOR = ANCHOR_TOP_LEFT
-INVENTORY_ANCHOR = ANCHOR_CENTER
-RAID_OUTCOME_ANCHOR = ANCHOR_CENTER
-UI_REFERENCE_ASPECT = 16 / 9
+def scale_region(region, actual_width, actual_height):
+    """Scale a region tuned at 3440x1440 to the current screen.
 
-
-def scale_region(region, actual_width, actual_height, anchor=ANCHOR_TOP_LEFT):
+    Matches the detection test bench: width and height are scaled
+    separately.
+    """
     left, top, right, bottom = region
-    if anchor == ANCHOR_TOP_LEFT:
-        scale = actual_height / Reference_screen_height
-
-        def map_x(x):
-            return x * scale
-
-        def map_y(y):
-            return y * scale
-    elif anchor == ANCHOR_CENTER:
-        scale = min(
-            actual_height / Reference_screen_height,
-            actual_width / (Reference_screen_height * UI_REFERENCE_ASPECT),
-        )
-
-        def map_x(x):
-            return actual_width / 2 + (x - Reference_screen_width / 2) * scale
-
-        def map_y(y):
-            return actual_height / 2 + (y - Reference_screen_height / 2) * scale
-    else:
-        raise ValueError(f"Unknown anchor: {anchor}")
-
+    scale_x = actual_width / Reference_screen_width
+    scale_y = actual_height / Reference_screen_height
     return (
-        int(round(map_x(left))),
-        int(round(map_y(top))),
-        int(round(map_x(right))),
-        int(round(map_y(bottom))),
+        int(left * scale_x),
+        int(top * scale_y),
+        int(right * scale_x),
+        int(bottom * scale_y),
     )
 
 
@@ -267,9 +238,7 @@ def get_inventory_status():
         state["last_sample_time"] = now
         screen_width, screen_height = get_screen_resolution()
         scaled_tabs = {
-            name: scale_region(
-                region, screen_width, screen_height, INVENTORY_ANCHOR
-            )
+            name: scale_region(region, screen_width, screen_height)
             for name, region in INVENTORY_TAB_REGIONS.items()
         }
         capture_region = _region_bounds(list(scaled_tabs.values()))
@@ -446,7 +415,6 @@ def get_raid_outcome():
         RAID_OUTCOME_REGION,
         screen_width,
         screen_height,
-        RAID_OUTCOME_ANCHOR,
     )
     frame = _grab(inset_region(scaled_region, DETECTION_INSET))
     if frame is None:
@@ -516,9 +484,7 @@ def _rotated_region_points(region, angle_degrees):
 def _capture_limb_sample(limb):
     screen_width, screen_height = get_screen_resolution()
     region, angle_degrees = CV_LIMB_REGIONS[limb]
-    scaled_region = scale_region(
-        region, screen_width, screen_height, LIMB_ANCHOR
-    )
+    scaled_region = scale_region(region, screen_width, screen_height)
     sample_region = inset_region(scaled_region, DETECTION_INSET)
     sample_points = _rotated_region_points(sample_region, angle_degrees)
     capture_region = (

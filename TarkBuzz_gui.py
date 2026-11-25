@@ -386,7 +386,6 @@ class TarkBuzzGUI:
                 reference_region,
                 screen_width,
                 screen_height,
-                tarkbuzz.LIMB_ANCHOR,
             )
             sample_region = tarkbuzz.inset_region(
                 scaled_region,
@@ -418,7 +417,6 @@ class TarkBuzzGUI:
                     reference_region,
                     screen_width,
                     screen_height,
-                    tarkbuzz.INVENTORY_ANCHOR,
                 ),
                 tarkbuzz.DETECTION_INSET,
             )
@@ -441,7 +439,6 @@ class TarkBuzzGUI:
                 tarkbuzz.RAID_OUTCOME_REGION,
                 screen_width,
                 screen_height,
-                tarkbuzz.RAID_OUTCOME_ANCHOR,
             ),
             tarkbuzz.DETECTION_INSET,
         )
