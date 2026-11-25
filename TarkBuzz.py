@@ -73,12 +73,6 @@ DETECTED_COLOUR_RGB = {
     "red": (255, 0, 0),
     "black": (0, 0, 0),
 }
-COLOUR_LEVELS = {
-    DETECTED_COLOUR_RGB["green"]: 0.0,
-    DETECTED_COLOUR_RGB["yellow"]: 0.25,
-    DETECTED_COLOUR_RGB["red"]: 0.75,
-    DETECTED_COLOUR_RGB["black"]: 1.0,
-}
 _limb_detection_states = {}
 _last_limb_sample_time = 0.0
 _inventory_detection_state = {
@@ -90,11 +84,21 @@ _inventory_detection_state = {
 
 
 
-#default vibration levels for each color
+# Vibration level for each detected colour. Read at call time, so the GUI
+# can change these through set_colour_levels() while monitoring is running.
 green_limb = 0.0
 yellow_limb = 0.25
 red_limb = 0.75
 black_limb = 1.0
+COLOUR_LEVEL_KEYS = ("green_limb", "yellow_limb", "red_limb", "black_limb")
+
+
+def set_colour_levels(levels):
+    """Update vibration levels from a {'green_limb': 0.0, ...} dict."""
+    for key, value in levels.items():
+        if key not in COLOUR_LEVEL_KEYS:
+            raise ValueError(f"Unknown colour level: {key}")
+        globals()[key] = min(1.0, max(0.0, float(value)))
 
 _last_vibration_level = 0.0
 camera = dxcam.create(output_color="BGR")
@@ -637,7 +641,13 @@ def get_limb_detection_statuses():
 def get_damage_level_for_color(color):
     if color is None:
         return 0.0
-    return COLOUR_LEVELS.get(tuple(color), 0.0)
+    levels = {
+        DETECTED_COLOUR_RGB["green"]: green_limb,
+        DETECTED_COLOUR_RGB["yellow"]: yellow_limb,
+        DETECTED_COLOUR_RGB["red"]: red_limb,
+        DETECTED_COLOUR_RGB["black"]: black_limb,
+    }
+    return levels.get(tuple(color), 0.0)
 
 
 def head(color):

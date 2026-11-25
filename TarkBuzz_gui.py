@@ -14,10 +14,11 @@ import TarkBuzz as tarkbuzz
 DEFAULT_LEVELS = {
     "green_limb": 0.0,
     "yellow_limb": 0.25,
-    "orange_limb": 0.5,
     "red_limb": 0.75,
     "black_limb": 1.0,
 }
+COLOR_KEYS = list(DEFAULT_LEVELS)
+COLOR_LABELS = ["Green Limb", "Yellow Limb", "Red Limb", "Black Limb"]
 
 # Database helper functions
 DB_PATH = os.path.expanduser("~/.buzz_levels.db")
@@ -118,28 +119,32 @@ class TarkBuzzGUI:
         sliders.grid(row=2, column=0, sticky="nsew", padx=10, pady=8)
 
         self.level_vars = {}
-        color_keys = ["green_limb", "yellow_limb", "orange_limb", "red_limb", "black_limb"]
-        color_labels = ["Green Limb", "Yellow Limb", "Orange Limb", "Red Limb", "Black Limb"]
-        defaults = [DEFAULT_LEVELS[k] for k in color_keys]
-        
-        # Load saved levels from database
-        saved_levels = load_levels()
-        initial_values = [saved_levels.get(key, default) for key, default in zip(color_keys, defaults)]
 
-        for i, (key, label, initial_val) in enumerate(zip(color_keys, color_labels, initial_values)):
+        # Load saved levels from database (ignores keys no longer used)
+        saved_levels = load_levels()
+        initial_values = {
+            key: saved_levels.get(key, DEFAULT_LEVELS[key]) for key in COLOR_KEYS
+        }
+        tarkbuzz.set_colour_levels(initial_values)
+
+        for i, (key, label) in enumerate(zip(COLOR_KEYS, COLOR_LABELS)):
+            initial_val = initial_values[key]
             ttk.Label(sliders, text=label).grid(row=i, column=0, sticky="w")
             v = tk.DoubleVar(value=initial_val)
             s = ttk.Scale(sliders, from_=0.0, to=1.0, orient=tk.HORIZONTAL, variable=v)
             s.grid(row=i, column=1, sticky="we", padx=8)
-            val_label = ttk.Label(sliders, textvariable=tk.StringVar(value=f"{initial_val:.2f}"))
+            val_label = ttk.Label(sliders, text=f"{initial_val:.2f}", width=5, anchor="e")
             val_label.grid(row=i, column=2, sticky="e")
 
-            def make_trace(var, lab):
+            def make_trace(color_key, var, lab):
                 def on_change(*_):
-                    lab.config(text=f"{var.get():.2f}")
+                    value = float(var.get())
+                    lab.config(text=f"{value:.2f}")
+                    # Apply immediately; "Save Levels" only persists to disk.
+                    tarkbuzz.set_colour_levels({color_key: value})
                 return on_change
 
-            v.trace_add("write", make_trace(v, val_label))
+            v.trace_add("write", make_trace(key, v, val_label))
             self.level_vars[key] = v
 
         # Limb toggle section
@@ -502,31 +507,17 @@ class TarkBuzzGUI:
 
     def save_levels(self):
         levels_to_save = {
-            "green_limb": float(self.level_vars["green_limb"].get()),
-            "yellow_limb": float(self.level_vars["yellow_limb"].get()),
-            "orange_limb": float(self.level_vars["orange_limb"].get()),
-            "red_limb": float(self.level_vars["red_limb"].get()),
-            "black_limb": float(self.level_vars["black_limb"].get()),
+            key: float(self.level_vars[key].get()) for key in COLOR_KEYS
         }
-        
-        # Save to database
         save_levels_to_db(levels_to_save)
-        
-        # Update module variables
-        tarkbuzz.green_limb = levels_to_save["green_limb"]
-        tarkbuzz.yellow_limb = levels_to_save["yellow_limb"]
-        tarkbuzz.orange_limb = levels_to_save["orange_limb"]
-        tarkbuzz.red_limb = levels_to_save["red_limb"]
-        tarkbuzz.black_limb = levels_to_save["black_limb"]
-        
+        tarkbuzz.set_colour_levels(levels_to_save)
+
         messagebox.showinfo("Saved", "Color vibration levels saved to database.")
 
     def reset_to_default(self):
         """Reset all sliders to default values and clear database"""
-        color_keys = ["green_limb", "yellow_limb", "orange_limb", "red_limb", "black_limb"]
-        
-        # Reset sliders to hardcoded defaults
-        for key in color_keys:
+        # Reset sliders to hardcoded defaults (the slider trace applies them)
+        for key in COLOR_KEYS:
             self.level_vars[key].set(DEFAULT_LEVELS[key])
         
         # Clear database
