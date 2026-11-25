@@ -63,7 +63,15 @@ TORSO_YELLOW_MIN_VALUE = 55
 UNKNOWN_HOLD_SAMPLES = 8
 COLOUR_CHANGE_SAMPLES = 2
 
-camera = dxcam.create(output_color="BGR")
+_camera = None
+
+
+def get_camera():
+    """Create the dxcam capture on first use instead of at import time."""
+    global _camera
+    if _camera is None:
+        _camera = dxcam.create(output_color="BGR")
+    return _camera
 
 def get_screen_size():
     width = ctypes.windll.user32.GetSystemMetrics(0)
@@ -477,7 +485,7 @@ def debug_kia_loop():
 
     try:
         while True:
-            frame = camera.grab(region=detection_region)
+            frame = get_camera().grab(region=detection_region)
             if frame is not None:
                 detected_kia, kia_metrics = detect_kia_badge(frame)
                 detected_survived, survived_metrics = detect_survived_badge(
@@ -570,7 +578,7 @@ def debug_inventory_loop():
 
     try:
         while True:
-            frame = camera.grab(region=capture_region)
+            frame = get_camera().grab(region=capture_region)
             if frame is not None:
                 tab_scores = {
                     name: bright_neutral_ratio(
@@ -684,7 +692,7 @@ def debug_arm_loop(name, region, angle_degrees):
 
     try:
         while True:
-            frame = camera.grab(region=arm_capture_region)
+            frame = get_camera().grab(region=arm_capture_region)
             if frame is not None:
                 sample_frame = rectify_region(
                     frame,

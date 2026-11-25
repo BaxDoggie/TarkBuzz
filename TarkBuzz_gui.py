@@ -1,6 +1,7 @@
 import threading
 import asyncio
 import ctypes
+import logging
 import queue
 import tkinter as tk
 from concurrent.futures import ThreadPoolExecutor
@@ -12,6 +13,8 @@ import time
 from buttplug import DeviceOutputCommand, OutputType
 
 import TarkBuzz as tarkbuzz
+
+log = logging.getLogger("tarkbuzz")
 
 RAID_OUTCOME_LABELS = {
     "kia": "killed in action",
@@ -111,6 +114,13 @@ class TarkBuzzGUI:
         self.limb_enabled_state = {}
         self.raid_vibration_state = {}
         self.dynamic_buzz_state = False
+        self.pause_in_inventory_state = True
+        # Connection bookkeeping (touched only on the asyncio thread,
+        # except `connecting`, which the Connect button sets first).
+        self.connecting = False
+        self.monitor_generation = 0
+        self.monitor_task = None
+        self._sent_levels = {}
 
         # Create a persistent event loop for async operations
         self.loop = asyncio.new_event_loop()
@@ -227,6 +237,17 @@ class TarkBuzzGUI:
         )
         dynamic_buzz_check.grid(row=len(limb_keys) + 1, column=0, sticky="w", pady=(8, 0))
 
+        self.pause_in_inventory = tk.BooleanVar(value=True)
+        self._mirror_bool(
+            self.pause_in_inventory,
+            lambda on: setattr(self, "pause_in_inventory_state", on),
+        )
+        ttk.Checkbutton(
+            limb_frame,
+            text="Pause While In Inventory",
+            variable=self.pause_in_inventory,
+        ).grid(row=len(limb_keys) + 2, column=0, columnspan=2, sticky="w")
+
         outcome_frame = ttk.LabelFrame(
             root,
             text="Raid Outcome Vibration (60 seconds at maximum)",
@@ -319,7 +340,7 @@ class TarkBuzzGUI:
             try:
                 fn(*args)
             except Exception as e:
-                print(f"UI update error: {e}")
+                log.warning("UI update error: %s", e)
 
     def toggle_detection_overlay(self):
         if self.detection_overlay is not None:
@@ -358,6 +379,7 @@ class TarkBuzzGUI:
                 reference_region,
                 screen_width,
                 screen_height,
+                tarkbuzz.LIMB_ANCHOR,
             )
             sample_region = tarkbuzz.inset_region(
                 scaled_region,
@@ -389,6 +411,7 @@ class TarkBuzzGUI:
                     reference_region,
                     screen_width,
                     screen_height,
+                    tarkbuzz.INVENTORY_ANCHOR,
                 ),
                 tarkbuzz.DETECTION_INSET,
             )
@@ -411,6 +434,7 @@ class TarkBuzzGUI:
                 tarkbuzz.RAID_OUTCOME_REGION,
                 screen_width,
                 screen_height,
+                tarkbuzz.RAID_OUTCOME_ANCHOR,
             ),
             tarkbuzz.DETECTION_INSET,
         )
@@ -593,11 +617,49 @@ class TarkBuzzGUI:
             if self.limb_enabled_state.get(limb) and limb in colors
         }
 
-    async def set_all_devices(self, level):
+    def damaged_limb_levels(self, colors):
+        """Levels for enabled limbs that are detected and not green."""
+        green = tarkbuzz.DETECTED_COLOUR_RGB["green"]
+        return {
+            limb: level
+            for limb, level in self.enabled_limb_levels(colors).items()
+            if colors[limb] is not None and colors[limb] != green
+        }
+
+    def _monitor_active(self, generation):
+        return self.monitoring and generation == self.monitor_generation
+
+    async def set_all_devices(self, level, force=False, generation=None):
+        """Send a vibration level to every device.
+
+        Skips devices already at that level unless force is set, so the
+        monitor loop does not resend the same command every pass. With a
+        generation, stops sending as soon as that monitor loop is stale.
+        """
+        level = float(level)
         for device in list(self.devices):
-            await device.run_output(
-                DeviceOutputCommand(OutputType.VIBRATE, float(level))
-            )
+            if generation is not None and not self._monitor_active(generation):
+                return
+            key = id(device)
+            if not force and self._sent_levels.get(key) == level:
+                continue
+            await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, level))
+            self._sent_levels[key] = level
+
+    async def play_pattern(self, pattern):
+        devices = list(self.devices)
+        await asyncio.gather(
+            *(tarkbuzz.run_dynamic_buzz_pattern(d, pattern) for d in devices)
+        )
+        # run_dynamic_buzz_pattern always finishes by stopping the device.
+        for device in devices:
+            self._sent_levels[id(device)] = 0.0
+
+    async def stop_all_devices(self):
+        try:
+            await self.set_all_devices(0.0, force=True)
+        except Exception as e:
+            log.warning("Could not stop devices: %s", e)
 
     def set_raid_status(self, text):
         self.call_in_ui(self.raid_status_var.set, text)
@@ -632,6 +694,13 @@ class TarkBuzzGUI:
         if not url:
             messagebox.showerror("Error", "Please enter server URL")
             return
+        if self.connecting or self.client is not None:
+            messagebox.showinfo(
+                "Info",
+                "Already connected. Disconnect first to connect again.",
+            )
+            return
+        self.connecting = True
 
         async def do_connect():
             try:
@@ -641,12 +710,19 @@ class TarkBuzzGUI:
 
                 self.client = client
                 self.devices = []
+                self._sent_levels = {}
                 self.polling = True
                 self.monitoring = True
                 self.raid_started = False
+                self.raid_end_outcome = None
+                self.raid_vibration_until = None
                 await self.detect(self._reset_detection_blocking)
                 self._last_inventory_status = None
-                self.run_async(self.monitor_loop())
+                # A new generation makes any older monitor loop exit.
+                self.monitor_generation += 1
+                self.monitor_task = asyncio.create_task(
+                    self.monitor_loop(self.monitor_generation)
+                )
                 self.call_in_ui(self.devices_list.delete, 0, tk.END)
                 self.call_in_ui(
                     messagebox.showinfo,
@@ -656,6 +732,8 @@ class TarkBuzzGUI:
                 self.call_in_ui(self.poll_devices)
             except Exception as e:
                 self.call_in_ui(messagebox.showerror, "Connection error", str(e))
+            finally:
+                self.connecting = False
 
         self.run_async(do_connect())
 
@@ -668,6 +746,10 @@ class TarkBuzzGUI:
             try:
                 devices = list(self.client.devices.values())
                 self.devices = devices
+                current = {id(d) for d in devices}
+                self._sent_levels = {
+                    k: v for k, v in self._sent_levels.items() if k in current
+                }
                 names = []
                 for d in devices:
                     try:
@@ -676,7 +758,7 @@ class TarkBuzzGUI:
                         names.append(str(d))
                 self.call_in_ui(self._show_devices, names)
             except Exception as e:
-                print(f"Poll error: {e}")
+                log.warning("Poll error: %s", e)
             if self.polling:
                 self.call_in_ui(self.root.after, 5000, self.poll_devices)
 
@@ -687,12 +769,16 @@ class TarkBuzzGUI:
         for name in names:
             self.devices_list.insert(tk.END, name)
 
-    async def monitor_loop(self):
-        while self.monitoring:
+    async def monitor_loop(self, generation):
+        last_logged_levels = None
+        while self._monitor_active(generation):
             try:
                 inventory_status = await self.detect(tarkbuzz.get_inventory_status)
+                if not self._monitor_active(generation):
+                    break
                 if inventory_status != self._last_inventory_status:
                     self._last_inventory_status = inventory_status
+                    log.info("Inventory: %s", inventory_status)
                     self.call_in_ui(
                         self.inventory_status_var.set,
                         f"Inventory: {inventory_status}",
@@ -711,7 +797,7 @@ class TarkBuzzGUI:
                         continue
 
                     self.raid_started = True
-                    print("All health regions are green; raid monitoring enabled")
+                    log.info("All health regions are green; raid monitoring enabled")
                     self.set_raid_status("Raid status: in raid; monitoring")
 
                 now = time.monotonic()
@@ -723,9 +809,9 @@ class TarkBuzzGUI:
                         for limb in tarkbuzz.CV_LIMB_REGIONS
                     )
                     if all_regions_green:
-                        print("Gameplay resumed: all health regions are green")
+                        log.info("Gameplay resumed: all health regions are green")
                         if self.raid_vibration_until is not None:
-                            await self.set_all_devices(0.0)
+                            await self.set_all_devices(0.0, generation=generation)
                         self.raid_end_outcome = None
                         self.raid_vibration_until = None
                         await self.detect(tarkbuzz.reset_raid_outcome_detection)
@@ -736,7 +822,7 @@ class TarkBuzzGUI:
                             self.raid_vibration_until is not None
                             and now >= self.raid_vibration_until
                         ):
-                            await self.set_all_devices(0.0)
+                            await self.set_all_devices(0.0, generation=generation)
                             self.raid_vibration_until = None
                             outcome_label = RAID_OUTCOME_LABELS[
                                 self.raid_end_outcome
@@ -754,40 +840,59 @@ class TarkBuzzGUI:
                     outcome_label = RAID_OUTCOME_LABELS[outcome]
                     if self.raid_vibration_state.get(outcome):
                         self.raid_vibration_until = now + 60.0
-                        await self.set_all_devices(1.0)
+                        await self.set_all_devices(1.0, generation=generation)
                         status = (
                             f"Raid status: {outcome_label} "
                             "(maximum vibration for up to 60 seconds)"
                         )
                     else:
                         self.raid_vibration_until = None
-                        await self.set_all_devices(0.0)
+                        await self.set_all_devices(0.0, generation=generation)
                         status = (
                             f"Raid status: {outcome_label}; vibration disabled, "
                             "waiting for gameplay"
                         )
-                    print(f"Confirmed raid outcome: {outcome}")
+                    log.info("Confirmed raid outcome: %s", outcome)
                     self.set_raid_status(status)
                     await asyncio.sleep(0.1)
                     continue
 
                 if colors is None:
                     colors = await self.sample_limbs()
-                print(f"MONITOR COLORS: {colors}")
 
                 limb_levels = self.enabled_limb_levels(colors)
-                print(f"MONITOR LEVELS: {limb_levels}")
+                if limb_levels != last_logged_levels:
+                    last_logged_levels = limb_levels
+                    log.debug("Limb colours: %s", colors)
+                    log.debug("Limb levels: %s", limb_levels)
 
-                if limb_levels:
-                    if not self.devices:
-                        await asyncio.sleep(0.5)
+                if not self.devices:
+                    await asyncio.sleep(0.5)
+                    continue
+
+                if (
+                    self.pause_in_inventory_state
+                    and inventory_status == "In inventory"
+                ):
+                    await self.set_all_devices(0.0, generation=generation)
+                elif self.dynamic_buzz_state:
+                    pattern = tarkbuzz.calculate_dynamic_buzz_pattern(
+                        self.damaged_limb_levels(colors)
+                    )
+                    if pattern:
+                        await self.play_pattern(pattern)
                         continue
-                    await self.set_all_devices(max(limb_levels.values()))
+                    await self.set_all_devices(0.0, generation=generation)
+                else:
+                    await self.set_all_devices(
+                        max(limb_levels.values(), default=0.0),
+                        generation=generation,
+                    )
 
                 await asyncio.sleep(0.1)
 
             except Exception as e:
-                print(f"Monitor loop error: {e}")
+                log.warning("Monitor loop error: %s", e)
                 await asyncio.sleep(1)
 
     def disconnect(self):
@@ -798,6 +903,8 @@ class TarkBuzzGUI:
         async def do_disconnect():
             self.polling = False
             self.monitoring = False
+            self.monitor_generation += 1
+            await self.stop_all_devices()
             try:
                 await self.client.disconnect()
                 self.call_in_ui(
@@ -808,6 +915,7 @@ class TarkBuzzGUI:
             finally:
                 self.client = None
                 self.devices = []
+                self._sent_levels = {}
                 self.call_in_ui(self.devices_list.delete, 0, tk.END)
 
         self.run_async(do_disconnect())
@@ -817,7 +925,7 @@ class TarkBuzzGUI:
             # Stop vibration
             async def stop_vibrate():
                 try:
-                    await self.set_all_devices(0.0)
+                    await self.set_all_devices(0.0, force=True)
                     self.vibrating = False
                     self.call_in_ui(
                         messagebox.showinfo,
@@ -838,33 +946,30 @@ class TarkBuzzGUI:
         async def do_vibrate():
             try:
                 colors = await self.sample_limbs()
-                print(f"DEBUG: Sampled colors: {colors}")
-
                 limb_levels = self.enabled_limb_levels(colors)
-                print(f"DEBUG: Final limb_levels: {limb_levels}")
+                log.debug("Vibrate Now: colours %s, levels %s", colors, limb_levels)
 
                 if not limb_levels:
                     raise RuntimeError("Could not sample any limb colors")
 
                 if self.dynamic_buzz_state:
-                    print("DEBUG: Using dynamic buzzing")
-                    pattern = tarkbuzz.calculate_dynamic_buzz_pattern(limb_levels)
-                    print(f"DEBUG: Pattern: {pattern}")
+                    pattern = tarkbuzz.calculate_dynamic_buzz_pattern(
+                        self.damaged_limb_levels(colors)
+                    )
+                    log.debug("Vibrate Now: dynamic pattern %s", pattern)
                     if pattern:
-                        for device in list(self.devices):
-                            await tarkbuzz.run_dynamic_buzz_pattern(device, pattern)
+                        await self.play_pattern(pattern)
                         status_msg = f"Sent dynamic buzz pattern to {len(self.devices)} device(s)"
                     else:
                         # No damage detected (all green), send stop command to all
-                        await self.set_all_devices(0.0)
+                        await self.set_all_devices(0.0, force=True)
                         status_msg = "No damage detected - no buzzing sent"
                 else:
-                    print("DEBUG: Using standard vibration")
                     max_level = max(limb_levels.values())
-                    await self.set_all_devices(max_level)
+                    await self.set_all_devices(max_level, force=True)
                     status_msg = f"Sent vibration {max_level:.2f} to {len(self.devices)} device(s)"
 
-                print(f"DEBUG: Status message: {status_msg}")
+                log.info(status_msg)
                 self.vibrating = True
                 self.call_in_ui(
                     messagebox.showinfo,
@@ -872,9 +977,7 @@ class TarkBuzzGUI:
                     status_msg + "\n\nPress 'Vibrate Now' again to stop",
                 )
             except Exception as e:
-                print(f"DEBUG: Exception occurred: {e}")
-                import traceback
-                traceback.print_exc()
+                log.exception("Vibrate Now failed")
                 self.call_in_ui(messagebox.showerror, "Vibrate error", str(e))
 
         self.run_async(do_vibrate())
@@ -887,9 +990,11 @@ class TarkBuzzGUI:
             self.polling = False
             self.monitoring = False
             if self.client is not None:
-                async def dd():
+                async def stop_and_disconnect():
+                    self.monitor_generation += 1
+                    await self.stop_all_devices()
                     await self.client.disconnect()
-                future = self.run_async(dd())
+                future = self.run_async(stop_and_disconnect())
                 future.result(timeout=5)
         except Exception:
             pass
@@ -901,8 +1006,14 @@ class TarkBuzzGUI:
 
 
 def main():
+    logging.basicConfig(
+        level=logging.DEBUG if os.environ.get("TARKBUZZ_DEBUG") else logging.INFO,
+        format="%(asctime)s %(levelname)s %(message)s",
+        datefmt="%H:%M:%S",
+    )
     root = tk.Tk()
     app = TarkBuzzGUI(root)
+    root.protocol("WM_DELETE_WINDOW", app.on_quit)
     root.mainloop()
 
 

@@ -101,13 +101,40 @@ def set_colour_levels(levels):
         globals()[key] = min(1.0, max(0.0, float(value)))
 
 _last_vibration_level = 0.0
-camera = dxcam.create(output_color="BGR")
+_camera = None
 _raid_outcome_state = {
     "confirmed": None,
     "pending": None,
     "pending_samples": 0,
     "last_sample_time": 0.0,
 }
+
+
+def enable_dpi_awareness():
+    """Make Windows report real pixel sizes, matching what dxcam captures.
+
+    Without this, on a scaled display (125%, 150%, ...) GetSystemMetrics
+    returns a smaller, scaled resolution and every region is misplaced.
+    Must run before any window is created.
+    """
+    try:
+        ctypes.windll.shcore.SetProcessDpiAwareness(2)  # per-monitor aware
+    except Exception:
+        try:
+            ctypes.windll.user32.SetProcessDPIAware()
+        except Exception:
+            pass
+
+
+enable_dpi_awareness()
+
+
+def get_camera():
+    """Create the dxcam capture on first use instead of at import time."""
+    global _camera
+    if _camera is None:
+        _camera = dxcam.create(output_color="BGR")
+    return _camera
 
 
 def get_screen_resolution():
@@ -117,15 +144,49 @@ def get_screen_resolution():
     )
 
 
-def scale_region(region, actual_width, actual_height):
+# How each group of regions moves when the resolution differs from the
+# 3440x1440 reference. The UI is assumed to scale with screen height:
+# - ANCHOR_TOP_LEFT: pinned to the top-left corner (in-raid health figure).
+# - ANCHOR_CENTER: laid out around the screen centre (menus, raid outcome),
+#   limited to a 16:9 area so narrower screens (16:10) still fit.
+# At the reference resolution both anchors give the original coordinates.
+ANCHOR_TOP_LEFT = "top_left"
+ANCHOR_CENTER = "center"
+LIMB_ANCHOR = ANCHOR_TOP_LEFT
+INVENTORY_ANCHOR = ANCHOR_CENTER
+RAID_OUTCOME_ANCHOR = ANCHOR_CENTER
+UI_REFERENCE_ASPECT = 16 / 9
+
+
+def scale_region(region, actual_width, actual_height, anchor=ANCHOR_TOP_LEFT):
     left, top, right, bottom = region
-    scale_x = actual_width / Reference_screen_width
-    scale_y = actual_height / Reference_screen_height
+    if anchor == ANCHOR_TOP_LEFT:
+        scale = actual_height / Reference_screen_height
+
+        def map_x(x):
+            return x * scale
+
+        def map_y(y):
+            return y * scale
+    elif anchor == ANCHOR_CENTER:
+        scale = min(
+            actual_height / Reference_screen_height,
+            actual_width / (Reference_screen_height * UI_REFERENCE_ASPECT),
+        )
+
+        def map_x(x):
+            return actual_width / 2 + (x - Reference_screen_width / 2) * scale
+
+        def map_y(y):
+            return actual_height / 2 + (y - Reference_screen_height / 2) * scale
+    else:
+        raise ValueError(f"Unknown anchor: {anchor}")
+
     return (
-        int(left * scale_x),
-        int(top * scale_y),
-        int(right * scale_x),
-        int(bottom * scale_y),
+        int(round(map_x(left))),
+        int(round(map_y(top))),
+        int(round(map_x(right))),
+        int(round(map_y(bottom))),
     )
 
 
@@ -184,11 +245,13 @@ def get_inventory_status():
         state["last_sample_time"] = now
         screen_width, screen_height = get_screen_resolution()
         scaled_tabs = {
-            name: scale_region(region, screen_width, screen_height)
+            name: scale_region(
+                region, screen_width, screen_height, INVENTORY_ANCHOR
+            )
             for name, region in INVENTORY_TAB_REGIONS.items()
         }
         capture_region = _region_bounds(list(scaled_tabs.values()))
-        frame = camera.grab(region=capture_region)
+        frame = get_camera().grab(region=capture_region)
         if frame is not None:
             tab_scores = {
                 name: _bright_neutral_ratio(
@@ -361,8 +424,9 @@ def get_raid_outcome():
         RAID_OUTCOME_REGION,
         screen_width,
         screen_height,
+        RAID_OUTCOME_ANCHOR,
     )
-    frame = camera.grab(region=inset_region(scaled_region, DETECTION_INSET))
+    frame = get_camera().grab(region=inset_region(scaled_region, DETECTION_INSET))
     if frame is None:
         return _raid_outcome_state["confirmed"]
 
@@ -430,7 +494,9 @@ def _rotated_region_points(region, angle_degrees):
 def _capture_limb_sample(limb):
     screen_width, screen_height = get_screen_resolution()
     region, angle_degrees = CV_LIMB_REGIONS[limb]
-    scaled_region = scale_region(region, screen_width, screen_height)
+    scaled_region = scale_region(
+        region, screen_width, screen_height, LIMB_ANCHOR
+    )
     sample_region = inset_region(scaled_region, DETECTION_INSET)
     sample_points = _rotated_region_points(sample_region, angle_degrees)
     capture_region = (
@@ -439,7 +505,7 @@ def _capture_limb_sample(limb):
         int(np.ceil(max(point[0] for point in sample_points))),
         int(np.ceil(max(point[1] for point in sample_points))),
     )
-    frame = camera.grab(region=capture_region)
+    frame = get_camera().grab(region=capture_region)
     if frame is None:
         return None
 
@@ -727,7 +793,6 @@ async def main():
     # await selected_device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
     # await client.disconnect()
     print("Test ended - goodbye!")
-if __name__ == "__main__":    asyncio.run(main())
 
 
 # Helper for external modules to map CV-classified limb colours to vibration levels.
@@ -823,3 +888,7 @@ async def run_dynamic_buzz_pattern(device, pattern):
     
     # Ensure device stops after pattern
     await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
+
+
+if __name__ == "__main__":
+    asyncio.run(main())
