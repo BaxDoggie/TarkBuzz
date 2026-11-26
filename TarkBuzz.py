@@ -1,8 +1,4 @@
-import asyncio
 import time
-from buttplug.client import ButtplugClient
-from buttplug import DeviceOutputCommand
-from buttplug import OutputType
 import cv2
 import ctypes
 import dxcam
@@ -86,11 +82,17 @@ _inventory_detection_state = {
 
 # Vibration level for each detected colour. Read at call time, so the GUI
 # can change these through set_colour_levels() while monitoring is running.
-green_limb = 0.0
-yellow_limb = 0.25
-red_limb = 0.75
-black_limb = 1.0
-COLOUR_LEVEL_KEYS = ("green_limb", "yellow_limb", "red_limb", "black_limb")
+DEFAULT_COLOUR_LEVELS = {
+    "green_limb": 0.0,
+    "yellow_limb": 0.25,
+    "red_limb": 0.75,
+    "black_limb": 1.0,
+}
+COLOUR_LEVEL_KEYS = tuple(DEFAULT_COLOUR_LEVELS)
+green_limb = DEFAULT_COLOUR_LEVELS["green_limb"]
+yellow_limb = DEFAULT_COLOUR_LEVELS["yellow_limb"]
+red_limb = DEFAULT_COLOUR_LEVELS["red_limb"]
+black_limb = DEFAULT_COLOUR_LEVELS["black_limb"]
 
 
 def set_colour_levels(levels):
@@ -100,7 +102,6 @@ def set_colour_levels(levels):
             raise ValueError(f"Unknown colour level: {key}")
         globals()[key] = min(1.0, max(0.0, float(value)))
 
-_last_vibration_level = 0.0
 _camera = None
 _raid_outcome_state = {
     "confirmed": None,
@@ -183,9 +184,26 @@ def scale_region(region, actual_width, actual_height):
     )
 
 
+def detection_inset(actual_width, actual_height):
+    """DETECTION_INSET scaled to the current screen.
+
+    The inset was tuned at 3440x1440 along with the regions, so it shrinks
+    with them; otherwise the thin arm and leg regions collapse to nothing
+    on smaller screens. Exactly DETECTION_INSET at the reference size.
+    """
+    scale = min(
+        actual_width / Reference_screen_width,
+        actual_height / Reference_screen_height,
+    )
+    return max(1, round(DETECTION_INSET * scale))
+
+
 def inset_region(region, inset):
+    """Shrink a region by inset on every side, always leaving at least 1 px."""
     left, top, right, bottom = region
-    return left + inset, top + inset, right - inset, bottom - inset
+    inset_x = max(0, min(inset, (right - left - 1) // 2))
+    inset_y = max(0, min(inset, (bottom - top - 1) // 2))
+    return left + inset_x, top + inset_y, right - inset_x, bottom - inset_y
 
 
 def _region_bounds(regions):
@@ -241,6 +259,7 @@ def get_inventory_status():
             name: scale_region(region, screen_width, screen_height)
             for name, region in INVENTORY_TAB_REGIONS.items()
         }
+        inset = detection_inset(screen_width, screen_height)
         capture_region = _region_bounds(list(scaled_tabs.values()))
         frame = _grab(capture_region)
         if frame is not None:
@@ -249,7 +268,7 @@ def get_inventory_status():
                     frame,
                     capture_region,
                     region,
-                    inset=DETECTION_INSET,
+                    inset=inset,
                 )
                 for name, region in scaled_tabs.items()
             }
@@ -264,7 +283,7 @@ def get_inventory_status():
                 frame,
                 capture_region,
                 capture_region,
-                inset=DETECTION_INSET,
+                inset=inset,
             )
             detected_inventory = (
                 selected_tab_ratio >= INVENTORY_MIN_TAB_WHITE_RATIO
@@ -416,7 +435,9 @@ def get_raid_outcome():
         screen_width,
         screen_height,
     )
-    frame = _grab(inset_region(scaled_region, DETECTION_INSET))
+    frame = _grab(
+        inset_region(scaled_region, detection_inset(screen_width, screen_height))
+    )
     if frame is None:
         return _raid_outcome_state["confirmed"]
 
@@ -485,7 +506,10 @@ def _capture_limb_sample(limb):
     screen_width, screen_height = get_screen_resolution()
     region, angle_degrees = CV_LIMB_REGIONS[limb]
     scaled_region = scale_region(region, screen_width, screen_height)
-    sample_region = inset_region(scaled_region, DETECTION_INSET)
+    sample_region = inset_region(
+        scaled_region,
+        detection_inset(screen_width, screen_height),
+    )
     sample_points = _rotated_region_points(sample_region, angle_degrees)
     capture_region = (
         int(np.floor(min(point[0] for point in sample_points))),
@@ -523,9 +547,8 @@ def _capture_limb_sample(limb):
     )
 
 
-def is_full_body_green():
-    """Return True only when every tested limb region is detected as green."""
-    colors = get_all_limb_colors()
+def all_limbs_green(colors):
+    """Return True only when every limb region in colors is detected as green."""
     return all(
         colors.get(limb) == DETECTED_COLOUR_RGB["green"]
         for limb in CV_LIMB_REGIONS
@@ -642,7 +665,7 @@ def get_all_limb_colors():
     now = time.monotonic()
     if limbs and now - _last_limb_sample_time >= LIMB_SAMPLE_INTERVAL:
         _last_limb_sample_time = now
-        # Spread region grabs across the tester's 0.5-second sample interval.
+        # Spread region grabs across the 0.5-second sample interval.
         capture_spacing = LIMB_SAMPLE_INTERVAL / len(limbs)
         for index, limb in enumerate(limbs):
             frame = _capture_limb_sample(limb)
@@ -704,108 +727,19 @@ def get_damage_level_for_color(color):
     return levels.get(tuple(color), 0.0)
 
 
-def head(color):
-    return get_damage_level_for_color(color)
+# Limb names in display order, for the UI.
+LIMB_KEYS = tuple(CV_LIMB_REGIONS)
 
 
-def Thorax(color):
-    return get_damage_level_for_color(color)
-
-
-def stomach(color):
-    return get_damage_level_for_color(color)
-
-
-def RightArm(color):
-    return get_damage_level_for_color(color)
-
-
-def LeftArm(color):
-    return get_damage_level_for_color(color)
-
-
-def RightLeg(color):
-    return get_damage_level_for_color(color)
-
-
-def LeftLeg(color):
-    return get_damage_level_for_color(color)
-        
-
-
-
-
-
-
-
-
-
-
-
-def calculate_damage_level(colors):
-    global _last_vibration_level
-    mapping = {
-        "head": head,
-        "thorax": Thorax,
-        "stomach": stomach,
-        "right_arm": RightArm,
-        "left_arm": LeftArm,
-        "right_leg": RightLeg,
-        "left_leg": LeftLeg,
-    }
-    levels = [fn(colors[limb]) for limb, fn in mapping.items() if limb in colors]
-    _last_vibration_level = max(levels) if levels else 0.0
-    return _last_vibration_level
-
-
-async def main():
-    print("CV LIMB COLOR DETECTION TEST")
-    print("Press Ctrl+C to stop")
-    
-    
-
-    try:
-        while True:
-            colors = get_all_limb_colors()
-            damage_level = calculate_damage_level(colors)
-            print(f"Calculated normal vibration level: {damage_level:.2f}")
-            print(f"CV limb colors: {colors}")
-
-            await asyncio.sleep(0.1)
-            
-            
-    except KeyboardInterrupt:
-        print("\nTest stopped by user")
-    
-    # # COMMENTED OUT CLEANUP
-    # await selected_device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
-    # await client.disconnect()
-    print("Test ended - goodbye!")
-
-
-# Helper for external modules to map CV-classified limb colours to vibration levels.
 def get_vibration_for_limb(limb_name, color):
     """Return the vibration level for a CV-classified limb colour.
 
-    limb_name: one of 'head','thorax','stomach','right_arm','left_arm','right_leg','left_leg'
-    color: canonical RGB tuple, or None when unknown/unimplemented
+    limb_name: one of LIMB_KEYS
+    color: canonical RGB tuple, or None when unknown
     """
-    mapping = {
-        "head": head,
-        "thorax": Thorax,
-        "stomach": stomach,
-        "right_arm": RightArm,
-        "left_arm": LeftArm,
-        "right_leg": RightLeg,
-        "left_leg": LeftLeg,
-    }
-    fn = mapping.get(limb_name.lower())
-    if fn is None:
+    if limb_name.lower() not in CV_LIMB_REGIONS:
         raise ValueError(f"Unknown limb: {limb_name}")
-    return fn(color)
-
-# Expose available limb keys for a UI
-LIMB_KEYS = ["head", "thorax", "stomach", "right_arm", "left_arm", "right_leg", "left_leg"]
+    return get_damage_level_for_color(color)
 
 
 def calculate_dynamic_buzz_pattern(limb_levels_dict):
@@ -854,29 +788,3 @@ def calculate_dynamic_buzz_pattern(limb_levels_dict):
             pattern.append((0.0, off_time))  # Pulse off
     
     return pattern
-
-
-async def run_dynamic_buzz_pattern(device, pattern):
-    """
-    Send a dynamic buzz pattern to a device.
-    
-    device: ButtplugClient device
-    pattern: list of (intensity, duration_ms) tuples
-    """
-    from buttplug import DeviceOutputCommand, OutputType
-    
-    if not pattern:
-        # No pattern, send stop command
-        await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
-        return
-    
-    for intensity, duration in pattern:
-        await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, float(intensity)))
-        await asyncio.sleep(duration / 1000.0)  # Convert ms to seconds
-    
-    # Ensure device stops after pattern
-    await device.run_output(DeviceOutputCommand(OutputType.VIBRATE, 0.0))
-
-
-if __name__ == "__main__":
-    asyncio.run(main())

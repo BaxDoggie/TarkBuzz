@@ -25,13 +25,7 @@ RAID_OUTCOME_LABELS = {
 }
 
 
-# Default vibration levels (hardcoded)
-DEFAULT_LEVELS = {
-    "green_limb": 0.0,
-    "yellow_limb": 0.25,
-    "red_limb": 0.75,
-    "black_limb": 1.0,
-}
+DEFAULT_LEVELS = dict(tarkbuzz.DEFAULT_COLOUR_LEVELS)
 COLOR_KEYS = list(DEFAULT_LEVELS)
 COLOR_LABELS = ["Green Limb", "Yellow Limb", "Red Limb", "Black Limb"]
 
@@ -117,9 +111,10 @@ class TarkBuzzGUI:
         self.raid_vibration_state = {}
         self.dynamic_buzz_state = False
         self.pause_in_inventory_state = True
-        # Connection bookkeeping (touched only on the asyncio thread,
-        # except `connecting`, which the Connect button sets first).
+        # Connection bookkeeping (touched only on the asyncio thread, except
+        # `connecting` and `disconnecting`, which the buttons set first).
         self.connecting = False
+        self.disconnecting = False
         self.monitor_generation = 0
         self.monitor_task = None
         self.testing_vibration = False
@@ -192,8 +187,8 @@ class TarkBuzzGUI:
         self.limb_enabled = {}
         self.limb_status_vars = {}
         self.limb_status_labels = {}
-        limb_keys = ["head", "thorax", "stomach", "right_arm", "left_arm", "right_leg", "left_leg"]
-        limb_labels = ["Head", "Thorax", "Stomach", "Right Arm", "Left Arm", "Right Leg", "Left Leg"]
+        limb_keys = tarkbuzz.LIMB_KEYS
+        limb_labels = [key.replace("_", " ").title() for key in limb_keys]
         ttk.Label(
             limb_frame,
             text="Track",
@@ -357,6 +352,7 @@ class TarkBuzzGUI:
             return
 
         screen_width, screen_height = tarkbuzz.get_screen_resolution()
+        inset = tarkbuzz.detection_inset(screen_width, screen_height)
         overlay = tk.Toplevel(self.root)
         overlay.overrideredirect(True)
         overlay.attributes("-topmost", True)
@@ -389,7 +385,7 @@ class TarkBuzzGUI:
             )
             sample_region = tarkbuzz.inset_region(
                 scaled_region,
-                tarkbuzz.DETECTION_INSET,
+                inset,
             )
             points = tarkbuzz._rotated_region_points(
                 sample_region,
@@ -418,7 +414,7 @@ class TarkBuzzGUI:
                     screen_width,
                     screen_height,
                 ),
-                tarkbuzz.DETECTION_INSET,
+                inset,
             )
             canvas.create_rectangle(
                 *tab_region,
@@ -440,7 +436,7 @@ class TarkBuzzGUI:
                 screen_width,
                 screen_height,
             ),
-            tarkbuzz.DETECTION_INSET,
+            inset,
         )
         raid_points = (
             (raid_region[0], raid_region[1]),
@@ -706,6 +702,12 @@ class TarkBuzzGUI:
         if not url:
             messagebox.showerror("Error", "Please enter server URL")
             return
+        if self.disconnecting:
+            messagebox.showinfo(
+                "Info",
+                "Still disconnecting. Try again in a moment.",
+            )
+            return
         if self.connecting or self.client is not None:
             messagebox.showinfo(
                 "Info",
@@ -799,12 +801,7 @@ class TarkBuzzGUI:
                 colors = None
                 if not self.raid_started:
                     colors = await self.sample_limbs()
-                    all_regions_green = all(
-                        colors.get(limb)
-                        == tarkbuzz.DETECTED_COLOUR_RGB["green"]
-                        for limb in tarkbuzz.CV_LIMB_REGIONS
-                    )
-                    if not all_regions_green:
+                    if not tarkbuzz.all_limbs_green(colors):
                         await asyncio.sleep(0.1)
                         continue
 
@@ -815,14 +812,12 @@ class TarkBuzzGUI:
                 now = time.monotonic()
                 if self.raid_end_outcome is not None:
                     colors = await self.sample_limbs()
-                    all_regions_green = all(
-                        colors.get(limb)
-                        == tarkbuzz.DETECTED_COLOUR_RGB["green"]
-                        for limb in tarkbuzz.CV_LIMB_REGIONS
-                    )
-                    if all_regions_green:
+                    # While Test Vibration runs it owns the devices; it
+                    # stops them itself when it finishes.
+                    testing = self.testing_vibration
+                    if tarkbuzz.all_limbs_green(colors):
                         log.info("Gameplay resumed: all health regions are green")
-                        if self.raid_vibration_until is not None:
+                        if self.raid_vibration_until is not None and not testing:
                             await self.set_all_devices(0.0, generation=generation)
                         self.raid_end_outcome = None
                         self.raid_vibration_until = None
@@ -830,11 +825,18 @@ class TarkBuzzGUI:
                         self.set_raid_status("Raid status: monitoring")
 
                     if self.raid_end_outcome is not None:
-                        if (
-                            self.raid_vibration_until is not None
-                            and now >= self.raid_vibration_until
-                        ):
-                            await self.set_all_devices(0.0, generation=generation)
+                        until = self.raid_vibration_until
+                        if until is not None and now < until:
+                            if not testing:
+                                # Only resends after a test changed the level.
+                                await self.set_all_devices(
+                                    1.0, generation=generation
+                                )
+                        elif until is not None:
+                            if not testing:
+                                await self.set_all_devices(
+                                    0.0, generation=generation
+                                )
                             self.raid_vibration_until = None
                             outcome_label = RAID_OUTCOME_LABELS[
                                 self.raid_end_outcome
@@ -850,16 +852,21 @@ class TarkBuzzGUI:
                 if outcome in RAID_OUTCOME_LABELS:
                     self.raid_end_outcome = outcome
                     outcome_label = RAID_OUTCOME_LABELS[outcome]
+                    # During Test Vibration, leave the devices alone; the
+                    # raid-end branch above starts the buzz once it ends.
+                    testing = self.testing_vibration
                     if self.raid_vibration_state.get(outcome):
                         self.raid_vibration_until = now + 60.0
-                        await self.set_all_devices(1.0, generation=generation)
+                        if not testing:
+                            await self.set_all_devices(1.0, generation=generation)
                         status = (
                             f"Raid status: {outcome_label} "
                             "(maximum vibration for up to 60 seconds)"
                         )
                     else:
                         self.raid_vibration_until = None
-                        await self.set_all_devices(0.0, generation=generation)
+                        if not testing:
+                            await self.set_all_devices(0.0, generation=generation)
                         status = (
                             f"Raid status: {outcome_label}; vibration disabled, "
                             "waiting for gameplay"
@@ -913,17 +920,27 @@ class TarkBuzzGUI:
                 await asyncio.sleep(1)
 
     def disconnect(self):
+        if self.disconnecting:
+            return
+        if self.connecting:
+            messagebox.showinfo(
+                "Info",
+                "Still connecting. Try again once the connection finishes.",
+            )
+            return
         if self.client is None:
             messagebox.showinfo("Info", "Not connected")
             return
+        self.disconnecting = True
 
         async def do_disconnect():
-            self.polling = False
-            self.monitoring = False
-            self.monitor_generation += 1
-            await self.stop_all_devices()
+            client = self.client
             try:
-                await self.client.disconnect()
+                self.polling = False
+                self.monitoring = False
+                self.monitor_generation += 1
+                await self.stop_all_devices()
+                await client.disconnect()
                 self.call_in_ui(
                     messagebox.showinfo, "Disconnected", "Client disconnected"
                 )
@@ -934,6 +951,7 @@ class TarkBuzzGUI:
                 self.devices = []
                 self._sent_levels = {}
                 self.call_in_ui(self.devices_list.delete, 0, tk.END)
+                self.disconnecting = False
 
         self.run_async(do_disconnect())
 

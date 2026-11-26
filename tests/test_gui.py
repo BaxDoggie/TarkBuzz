@@ -211,7 +211,63 @@ class MonitorTests(GuiTestCase):
         self.assertFalse(self.app.testing_vibration)
 
 
+class RaidBuzzAndTestTests(GuiTestCase):
+    def test_raid_buzz_resumes_after_test_vibration(self):
+        self.app.raid_vibration_enabled["kia"].set(True)
+        with mock.patch.object(gui, "TEST_VIBRATION_SECONDS", 1):
+            self.run_ui(
+                {
+                    0: self.app.connect_client,
+                    10: self.set_phase(colors=RED),
+                    16: self.set_phase(outcome="kia"),
+                    24: self.app.test_vibration,
+                },
+                ticks=45,
+            )
+        levels = self.device.levels
+        # buzz at 1.0, test takes over (0.75, then 0), buzz comes back.
+        self.assertEqual(levels[-4:], [1.0, 0.75, 0.0, 1.0], levels)
+
+    def test_raid_buzz_end_does_not_cut_test_short(self):
+        self.app.raid_vibration_enabled["kia"].set(True)
+        end_buzz = lambda: self.app.loop.call_soon_threadsafe(
+            setattr, self.app, "raid_vibration_until", 0.0
+        )
+        with mock.patch.object(gui, "TEST_VIBRATION_SECONDS", 1):
+            self.run_ui(
+                {
+                    0: self.app.connect_client,
+                    10: self.set_phase(colors=RED),
+                    16: self.set_phase(outcome="kia"),
+                    24: self.app.test_vibration,
+                    26: end_buzz,
+                },
+                ticks=45,
+            )
+        levels = self.device.levels
+        # The test's 0.75 is followed only by the test's own stop.
+        self.assertEqual(levels[-3:], [1.0, 0.75, 0.0], levels)
+
+
 class ConnectionTests(GuiTestCase):
+    def test_double_disconnect_shows_no_error(self):
+        self.run_ui(
+            {
+                0: self.app.connect_client,
+                5: lambda: (self.app.disconnect(), self.app.disconnect()),
+            },
+            ticks=10,
+        )
+        self.error.assert_not_called()
+        self.assertIsNone(self.app.client)
+        self.assertFalse(self.app.disconnecting)
+
+    def test_disconnect_while_connecting_says_still_connecting(self):
+        self.app.connecting = True
+        self.app.disconnect()
+        self.app.connecting = False
+        self.assertIn("Still connecting", self.info.call_args_list[-1].args[1])
+
     def test_second_connect_is_refused(self):
         self.run_ui(
             {0: self.app.connect_client, 5: self.app.connect_client},

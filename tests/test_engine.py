@@ -45,6 +45,46 @@ class ScalingTests(unittest.TestCase):
                 )
 
 
+class InsetTests(unittest.TestCase):
+    RESOLUTIONS = [(2560, 1440), (1920, 1080), (1600, 900), (1366, 768), (1280, 720)]
+
+    def test_reference_resolution_keeps_original_inset(self):
+        self.assertEqual(tb.detection_inset(*REF), tb.DETECTION_INSET)
+        for region in all_regions():
+            left, top, right, bottom = region
+            inset = tb.DETECTION_INSET
+            self.assertEqual(
+                tb.inset_region(region, tb.detection_inset(*REF)),
+                (left + inset, top + inset, right - inset, bottom - inset),
+            )
+
+    def test_sample_regions_never_collapse_on_small_screens(self):
+        for width, height in self.RESOLUTIONS:
+            inset = tb.detection_inset(width, height)
+            for region in all_regions():
+                left, top, right, bottom = tb.inset_region(
+                    tb.scale_region(region, width, height), inset
+                )
+                self.assertGreater(right - left, 0, (width, height, region))
+                self.assertGreater(bottom - top, 0, (width, height, region))
+
+    def test_inset_region_leaves_at_least_one_pixel(self):
+        self.assertEqual(tb.inset_region((10, 10, 13, 20), 4), (11, 14, 12, 16))
+        self.assertEqual(tb.inset_region((10, 10, 11, 11), 4), (10, 10, 11, 11))
+
+    def test_limb_capture_works_at_small_resolutions(self):
+        def fake_grab(region):
+            left, top, right, bottom = region
+            return np.zeros((bottom - top, right - left, 3), dtype=np.uint8)
+
+        for width, height in self.RESOLUTIONS:
+            with mock.patch.object(tb, "get_screen_resolution", lambda: (width, height)), \
+                    mock.patch.object(tb, "_grab", fake_grab):
+                for limb in tb.CV_LIMB_REGIONS:
+                    sample = tb._capture_limb_sample(limb)
+                    self.assertGreater(sample.size, 0, (width, height, limb))
+
+
 class ImportTests(unittest.TestCase):
     def test_import_does_not_open_screen_capture(self):
         self.assertEqual(_support.camera_creations, [])
